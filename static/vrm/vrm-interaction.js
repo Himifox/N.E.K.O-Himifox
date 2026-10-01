@@ -362,7 +362,8 @@ class VRMInteraction {
         const meta = String(vrm?.meta?.metaVersion || '');
         const isVrm10 = version === '0.0' || version === '1.0'
             ? version === '1.0' : meta === '1' || meta.startsWith('1.');
-        return { yawOffset: isVrm10 ? 0 : Math.PI, horizontalSign: 1, vrmVersion: isVrm10 ? '1.0' : '0.0' };
+        return { yawOffset: isVrm10 && !vrm?.userData?.orientationFlipped ? 0 : Math.PI,
+            horizontalSign: 1, vrmVersion: isVrm10 ? '1.0' : '0.0' };
     }
 
     _getCameraFacingRotationY(scene) {
@@ -461,18 +462,17 @@ class VRMInteraction {
     }
 
     async _playMovementClip(token, path, action, options = {}) {
-        if (token !== this.movementToken || !this.isMoving) return false;
+        if (token !== this.movementToken || !this.isMoving) return;
         const played = await this.manager.playVRMAAnimation(path, {
             loop: !!options.loop,
-            fadeDuration: options.fadeDuration ?? 0.2,
+            fadeDuration: 0.2,
             immediate: options.immediate === true,
             isIdle: false,
             movement: true,
             shouldApply: () => token === this.movementToken && this.isMoving
         });
-        if (token !== this.movementToken || !this.isMoving || played !== true) return false;
+        if (token !== this.movementToken || !this.isMoving || played !== true) return;
         this._movementAction = action;
-        return true;
     }
 
     async _beginMovementPlayback(token) {
@@ -565,7 +565,6 @@ class VRMInteraction {
         if (!Number.isFinite(pendingRestYaw)) void this._savePositionAfterInteraction();
         else this._movementRestRotationY = pendingRestYaw;
         if (!willMove) {
-            if (Number.isFinite(pendingRestYaw)) this.isMoving = true;
             void this._finishMovement();
             return true;
         }
@@ -921,32 +920,7 @@ class VRMInteraction {
                     this._rememberPanDragPointer(e);
                     this._rememberDragHintPanPointer(e);
                 }
-                // 保留本次拖拽类型再清状态，跨屏切换只对 pan 生效
-                // （orbit 绕包围盒中心原地转身，屏幕投影不位移，无需多屏切换）
-                const wasPanDrag = this.dragMode === 'pan';
-                this.isDragging = false;
-                this.dragMode = null;
-                canvas.style.cursor = 'default';
-
-                // 拖拽结束后恢复按钮的 pointer-events
-                this._restoreButtonPointerEvents();
-
-                // 多屏幕支持：仅对平移拖拽检测是否移出当前屏幕并切换到新屏幕
-                // 与 Live2D 行为对齐：若发生切屏，_checkAndSwitchDisplay 内部负责回弹和保存
-                const displaySwitched = wasPanDrag
-                    ? await this._checkAndSwitchDisplay()
-                    : false;
-
-                if (!displaySwitched) {
-                    if (wasPanDrag) {
-                        await this._recordDragHintPointerEdgeRelease('vrm');
-                    }
-                    // 拖拽结束后：若超出屏幕范围，执行回弹
-                    await this._snapModelIntoScreen({ animate: true });
-
-                    // 拖动结束后保存位置（包含回弹后的位置）
-                    await this._savePositionAfterInteraction();
-                }
+                await this._endDrag();
             }
         };
 
@@ -1129,8 +1103,38 @@ class VRMInteraction {
     }
 
     /**
-     * 设置锁定状态
+     * 收尾平移或旋转拖拽，锁定和鼠标释放复用同一流程。
      */
+    async _endDrag() {
+        if (!this.isDragging) return;
+        // 保留本次拖拽类型再清状态，跨屏切换只对 pan 生效
+        // （orbit 绕包围盒中心原地转身，屏幕投影不位移，无需多屏切换）
+        const wasPanDrag = this.dragMode === 'pan';
+        this.isDragging = false;
+        this.dragMode = null;
+        if (this.manager.renderer) this.manager.renderer.domElement.style.cursor = 'default';
+
+        // 拖拽结束后恢复按钮的 pointer-events
+        this._restoreButtonPointerEvents();
+
+        // 多屏幕支持：仅对平移拖拽检测是否移出当前屏幕并切换到新屏幕
+        // 与 Live2D 行为对齐：若发生切屏，_checkAndSwitchDisplay 内部负责回弹和保存
+        const displaySwitched = wasPanDrag
+            ? await this._checkAndSwitchDisplay()
+            : false;
+
+        if (!displaySwitched) {
+            if (wasPanDrag) {
+                await this._recordDragHintPointerEdgeRelease('vrm');
+            }
+            // 拖拽结束后：若超出屏幕范围，执行回弹
+            await this._snapModelIntoScreen({ animate: true });
+
+            // 拖动结束后保存位置（包含回弹后的位置）
+            await this._savePositionAfterInteraction();
+        }
+    }
+
     setLocked(locked) {
         const wasDragging = this.isDragging;
         this.isLocked = locked;
@@ -1145,19 +1149,11 @@ class VRMInteraction {
         // 不再修改 pointerEvents，改用逻辑拦截
         // 这样锁定时虽然不能移动/缩放，但依然可以点中模型弹出菜单
 
-        if (locked && this.isDragging) {
-            this.isDragging = false;
-            this.dragMode = null;
-            if (this.manager.renderer) {
-                this.manager.renderer.domElement.style.cursor = 'default';
-            }
-            // 恢复按钮的 pointer-events
-            this._restoreButtonPointerEvents();
-        }
+        if (locked && wasDragging) void this._endDrag();
         if (locked) {
             const interrupted = this._cancelGuidedMovement();
             // 锁定会吞掉拖拽结束事件，补存拖拽或引导移动被打断的姿态。
-            if (interrupted || wasDragging) void this._savePositionAfterInteraction();
+            if (interrupted && !wasDragging) void this._savePositionAfterInteraction();
         }
     }
 

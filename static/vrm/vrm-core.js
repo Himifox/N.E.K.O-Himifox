@@ -878,6 +878,11 @@ class VRMCore {
             // 检测 VRM 模型版本（0.0 或 1.0）
             this.vrmVersion = this.detectVRMVersion(vrm, gltf);
             const versionDefaultRotation = await this.applyVRM0CompatibilityRotation(vrm);
+            // 在用户旋转应用前记录加载器对局部正面的判断，重新加载存档也保持一致。
+            if (this.vrmVersion === '1.0' && window.VRMOrientationDetector) {
+                vrm.userData = vrm.userData || {};
+                vrm.userData.orientationFlipped = window.VRMOrientationDetector.detectNeedsRotation(vrm);
+            }
 
             // 计算模型的边界框，用于确定合适的初始大小
             const box = new THREE.Box3().setFromObject(vrm.scene);

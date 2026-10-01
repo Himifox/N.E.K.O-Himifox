@@ -24,7 +24,7 @@ class VRMOrientationDetector {
         return {
             vrmVersion: isVrm10 ? '1.0' : '0.0',
             // VRM0 的局部正面为 -Z，VRM1 为 +Z；用同一 yaw 校正所有方向。
-            yawOffset: isVrm10 ? 0 : Math.PI,
+            yawOffset: isVrm10 && !vrm?.userData?.orientationFlipped ? 0 : Math.PI,
             horizontalSign: 1
         };
     }
@@ -116,7 +116,8 @@ class VRMOrientationDetector {
             };
         }
 
-        const needsRotation = this.detectNeedsRotation(vrm);
+        const needsRotation = typeof vrm?.userData?.orientationFlipped === 'boolean'
+            ? vrm.userData.orientationFlipped : this.detectNeedsRotation(vrm);
 
         return {
             x: 0,

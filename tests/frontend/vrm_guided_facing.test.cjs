@@ -21,6 +21,34 @@ assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: 'broken' }
 assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '1.0' } }, 'unknown').vrmVersion, '1.0');
 assert.equal(detector.getMovementFacingProfile({ meta: { metaVersion: '0.0' } }).vrmVersion, '0.0');
 
+// A reverse-authored VRM1 goes through the real bone detector before preferences.
+for (const savedYaw of [null, 0.7]) {
+    const scene = new Object3D(); const chest = new Object3D(); const head = new Object3D();
+    head.position.set(0, 1, 0.2); scene.add(chest, head);
+    const vrm = { scene, meta: { metaVersion: '1.0' }, userData: {},
+        humanoid: { humanBones: { head: { node: head }, chest: { node: chest } } } };
+    vrm.userData.orientationFlipped = detector.detectNeedsRotation(vrm);
+    assert.equal(vrm.userData.orientationFlipped, true);
+    detector.applyRotation(vrm, detector.detectAndFixOrientation(vrm,
+        savedYaw === null ? null : { x: 0, y: savedYaw, z: 0 }));
+    const interaction = new Interaction({ currentModel: { scene, vrm }, core: { vrmVersion: '1.0' },
+        camera: { position: new Vector3(0, 0, 5), quaternion: new Quaternion(),
+            getWorldDirection(v) { return v.set(0, 0, -1); } } });
+    assert.equal(interaction._getMovementFacingProfile().yawOffset, Math.PI);
+    for (const y of [1, -1]) {
+        interaction.isMoving = true;
+        interaction.moveTarget = scene.position.clone().add(new Vector3(0, y * 10, 0));
+        interaction._movementFacingProfile = null;
+        interaction._updateGuidedMovement(0.1);
+        assert.ok(new Vector3(0, 0, -1).applyQuaternion(scene.quaternion).z * -y > 0.99);
+    }
+    interaction._setSceneYaw(scene, interaction._getCameraFacingRotationY(scene));
+    assert.ok(new Vector3(0, 0, -1).applyQuaternion(scene.quaternion).z > 0.99);
+    const helper = context.window.VRMOrientationDetector; delete context.window.VRMOrientationDetector;
+    assert.equal(interaction._getMovementFacingProfile().yawOffset, Math.PI);
+    context.window.VRMOrientationDetector = helper;
+}
+
 for (const version of ['0.0', '1.0']) {
     const authoredFront = version === '1.0' ? 1 : -1;
     for (const cameraYaw of [0, 0.7, -1.2]) {

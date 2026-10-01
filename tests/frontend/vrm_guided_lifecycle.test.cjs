@@ -46,6 +46,7 @@ const vm = require('node:vm');
             renderer: { domElement: { ...events, style: {} } },
             playVRMAAnimation: async () => true, stopVRMAAnimation() {} };
         const interaction = new window.VRMInteraction(manager);
+        interaction._snapModelIntoScreen = async () => {};
         interaction._savePositionAfterInteraction = async () => { saves.push(scene.quaternion.clone()); };
         interaction._hitTestModel = () => true;
         interaction.initDragAndZoom();
@@ -272,6 +273,24 @@ const vm = require('node:vm');
         assert.equal(f.saves.length, 1);
         assert.ok(f.saves[0].angleTo(expected) < 1e-8);
         assert.equal(f.interaction.isDragging, false);
+        f.interaction.cleanupDragAndZoom();
+    }
+    // Locking finishes drag boundaries before saving, without a duplicate mouseup.
+    for (const switched of [false, true]) {
+        const f = fixture(); const order = []; const snapping = deferred();
+        f.mouseDown(0);
+        f.interaction._checkAndSwitchDisplay = async () => { order.push('display');
+            if (switched) { f.scene.position.x = 2; await f.interaction._savePositionAfterInteraction(); }
+            return switched; };
+        f.interaction._recordDragHintPointerEdgeRelease = async () => { order.push('hint'); };
+        f.interaction._snapModelIntoScreen = async () => { order.push('snap'); await snapping.promise; f.scene.position.x = 1; };
+        f.interaction._savePositionAfterInteraction = async () => { order.push('save'); };
+        f.interaction.setLocked(true); await flush();
+        if (!switched) { assert.deepEqual(order, ['display', 'hint', 'snap']); snapping.resolve(); await flush(); }
+        assert.deepEqual(order, switched ? ['display', 'save'] : ['display', 'hint', 'snap', 'save']);
+        await f.interaction.mouseUpHandler({});
+        assert.equal(order.filter(x => x === 'save').length, 1);
+        assert.equal(f.scene.position.x, switched ? 2 : 1);
         f.interaction.cleanupDragAndZoom();
     }
     // An original-position selection while release is pending must retain one
