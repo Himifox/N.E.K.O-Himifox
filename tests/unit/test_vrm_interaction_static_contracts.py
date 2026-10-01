@@ -15,7 +15,7 @@ def test_vrm_initial_visibility_fence_uses_runtime_threshold():
 
 def test_vrm_display_switch_miss_records_bridge_errors_after_model_leaves_window():
     source = (PROJECT_ROOT / "static/vrm/vrm-interaction.js").read_text(encoding="utf-8")
-    method_section = source.split("async _checkAndSwitchDisplay() {", 1)[1].split("\n\n    /**\n     * 兼容旧接口", 1)[0]
+    method_section = source.split("async _checkAndSwitchDisplay(", 1)[1].split("\n\n    /**\n     * 兼容旧接口", 1)[0]
 
     assert method_section.index("const recordDisplaySwitchMiss = () => {") < method_section.index("try {")
     assert "let displaySwitchAttempted = false;" in method_section
