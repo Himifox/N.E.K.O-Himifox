@@ -383,9 +383,12 @@ class VRMInteraction {
     }
 
     _setSceneYaw(scene, yaw) {
+        this._rotateSceneYaw(scene, yaw - this._getSceneYaw(scene));
+    }
+
+    _rotateSceneYaw(scene, delta) {
         // XYZ 欧拉角在掉头后可能等价地表示为 X/Z ≈ π。此时只改 rotation.y
         // 会反转真实转向；绕世界 Y 轴组合四元数，保留模型原有俯仰和侧倾。
-        const delta = yaw - this._getSceneYaw(scene);
         const scratch = this._getMovementScratch();
         const turn = scratch.turn.setFromAxisAngle(scratch.up, delta);
         scene.quaternion.premultiply(turn);
@@ -633,7 +636,7 @@ class VRMInteraction {
                 while (diff > Math.PI) diff -= Math.PI * 2;
                 while (diff < -Math.PI) diff += Math.PI * 2;
                 const turnStep = diff * Math.min(1, dt * 10);
-                this._setSceneYaw(scene, currentYaw + turnStep);
+                this._rotateSceneYaw(scene, turnStep);
                 // 连续选点可能要求掉头；先完成转向再位移，避免转身期间倒着滑行。
                 if (Math.abs(diff - turnStep) > Math.PI / 12) {
                     this.movementVelocity = 0;
