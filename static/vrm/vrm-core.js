@@ -1486,6 +1486,11 @@ class VRMCore {
                     y: cameraPosition.y,
                     z: cameraPosition.z
                 };
+                for (const key of ['qx', 'qy', 'qz', 'qw', 'targetX', 'targetY', 'targetZ']) {
+                    if (Number.isFinite(cameraPosition[key])) {
+                        preferences.camera_position[key] = cameraPosition[key];
+                    }
+                }
             }
             
             // 显示器查询未完成也先占据写入顺序，所有调用入口共用队列。

@@ -39,6 +39,37 @@ const vm = require('node:vm');
         return { scene, manager, interaction, requests, persisted };
     }
 
+    // Camera orientation and orbit target survive the real save/load code.
+    {
+        const f = fixture(); const camera = f.manager.camera;
+        camera.position.set(2, 3, 7);
+        camera.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.7);
+        f.manager._cameraTarget = new THREE.Vector3(1, 2, -1);
+        const expectedQuaternion = camera.quaternion.clone();
+        const saving = f.interaction._savePositionAfterInteraction(); await flush();
+        camera.quaternion.identity(); f.manager._cameraTarget.set(9, 9, 9);
+        f.requests[0].complete(); await saving;
+        const preferences = f.persisted.get('/model-a.vrm');
+        assert.equal(preferences.camera_position.qy, expectedQuaternion.y);
+        assert.equal(preferences.camera_position.targetZ, -1);
+        const source = fs.readFileSync(path.join(root, 'static/vrm/vrm-core.js'), 'utf8');
+        const start = source.indexOf('            // 恢复相机位置，并记录 _cameraTarget');
+        const bodyStart = source.indexOf('{', source.indexOf('if (this.manager.camera', start));
+        let depth = 1; let end = bodyStart + 1;
+        while (depth) { if (source[end] === '{') depth++; if (source[end] === '}') depth--; end++; }
+        context.savedPreferences = preferences; context.savedManager = f.manager;
+        vm.runInContext(`(function(preferences) { ${source.slice(bodyStart + 1, end - 1)} }).call({manager: savedManager}, savedPreferences)`, context);
+        assert.ok(camera.quaternion.angleTo(expectedQuaternion) < 1e-8);
+        assert.deepEqual(f.manager._cameraTarget.toArray(), [1, 2, -1]);
+        assert.deepEqual(camera.position.toArray(), [2, 3, 7]);
+        const invalid = f.manager.core.saveUserPreferences('/model-a.vrm',
+            { x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 }, null, null, null,
+            { x: 2, y: 3, z: 7, qx: NaN, qy: Infinity, qz: 0, qw: 1, targetX: 0, targetY: NaN });
+        await flush();
+        assert.deepEqual(f.requests[1].preferences.camera_position,
+            { x: 2, y: 3, z: 7, qz: 0, qw: 1, targetX: 0 });
+        f.requests[1].complete(); await invalid;
+    }
     // The departure request is already in flight when the model is locked.
     // Hold its server response and prove the lock request cannot overtake it.
     {
