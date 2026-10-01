@@ -1,9 +1,9 @@
 # NOTICE — émotes VRMA de Hanami / Hanami VRMA emotes
 
-N.E.K.O. packaging note: the 11 imported `world-*.vrma` files are distributed
-as losslessly gzip-compressed `world-*.vrma.gz` files. The source filenames in
+N.E.K.O. packaging note: the single imported `world-walk.vrma` file is distributed
+as the losslessly gzip-compressed `world-walk.vrma.gz` file. The source filenames in
 the attribution below are retained; decompression restores the original bytes.
-This package imports only those 11 movement clips. The retained Hanami notice
+This package imports only that one movement clip. The retained Hanami notice
 below also describes its broader source library; Rocketbox clips and conversion
 tools described there are not included in this N.E.K.O. import.
 
