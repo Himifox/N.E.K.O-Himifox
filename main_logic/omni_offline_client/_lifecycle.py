@@ -16,6 +16,7 @@
 import asyncio
 import contextlib
 import functools
+import inspect
 import uuid
 
 from main_logic.agent_event_bus import (
@@ -224,8 +225,11 @@ class _LifecycleMixin:
         at the final). That one is taken over the same way and reported to
         ``on_response_displaced`` synchronously, before this generation can
         emit anything, so its owner closes it while the AI-turn buffer still
-        holds only its text. (``prompt_ephemeral`` never displaces: it
-        declines to begin over another reply.)
+        holds only its text. Whatever the owner still has to send (it may
+        return an async callable) is awaited by ``_run_displaced_followup``
+        right after the begin, before this reply sends anything.
+        (``prompt_ephemeral`` never displaces: it declines to begin over
+        another reply.)
         """
         displaced = self._take_displaced_reply()
         generation = int(getattr(self, "_response_generation", 0)) + 1
@@ -234,14 +238,36 @@ class _LifecycleMixin:
         self._active_completion_kind = completion_kind
         self._active_reply_owner = owner
         self._is_responding = True
+        self._displaced_followup = None
         if displaced:
             notify = getattr(self, "on_response_displaced", None)
             if notify is not None:
                 try:
-                    notify(displaced)
+                    followup = notify(displaced)
                 except Exception:
                     logger.exception("on_response_displaced callback failed")
+                else:
+                    if callable(followup):
+                        self._displaced_followup = followup
         return generation
+
+    async def _run_displaced_followup(self) -> None:
+        """Await what the displaced reply's owner still has to send (its
+        frontend turn end, or ``turn abandoned``), before this reply sends
+        anything: the begin runs ``on_response_displaced`` synchronously and
+        can only take that part back from it."""
+        followup = getattr(self, "_displaced_followup", None)
+        self._displaced_followup = None
+        if followup is None:
+            return
+        try:
+            pending = followup()
+            if inspect.isawaitable(pending):
+                await pending
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("on_response_displaced follow-up failed")
 
     def _take_displaced_reply(self) -> str:
         """Take over the reply a beginning generation displaces; "" if none.
@@ -745,6 +771,7 @@ class _LifecycleMixin:
         response_generation = self._begin_response_generation(_completion_kind, reply_owner)
 
         try:
+            await self._run_displaced_followup()
             set_call_type("proactive")
             for attempt in range(max_retries):
                 # 每次 attempt 重置流式状态（assistant_message / prefix /

@@ -1067,8 +1067,9 @@ async def test_an_interruption_that_cancels_a_newer_live_reply_reports_it_unfini
     assert client.on_response_displaced.call_args.args[0].finished is True
 
 
+@pytest.mark.parametrize("slow_send", [False, True])
 async def test_a_finished_avatar_reply_displaced_by_typed_text_is_sealed_before_it(
-    monkeypatch,
+    monkeypatch, slow_send,
 ):
     """Typed input still in its pre-generation awaits (no reply live, so the
     avatar busy gate lets a poke in); the avatar reply streams to the end and
@@ -1076,7 +1077,8 @@ async def test_a_finished_avatar_reply_displaced_by_typed_text_is_sealed_before_
     The claimed avatar turn is sealed on the frontend like one that ended just
     before the typed reply: its turn end (its meta, no request id: that id is
     the typed turn's) reaches the WebSocket before the typed reply's first
-    chunk."""
+    chunk, even when that send stalls (``slow_send``): the typed reply awaits
+    it before sending its provider request."""
     session, mgr, notes = _wire_text_path(monkeypatch)
 
     async def on_text_delta(text, is_first, **_kw):
@@ -1107,9 +1109,18 @@ async def test_a_finished_avatar_reply_displaced_by_typed_text_is_sealed_before_
 
     def on_displaced(kind):
         displaced.append(kind)
-        real_displaced(kind)
+        return real_displaced(kind)
 
     session.on_response_displaced = on_displaced
+    if slow_send:
+        real_send = mgr.websocket.send_json
+
+        async def stalling_send(message):
+            if message.get("meta") is meta:
+                await asyncio.sleep(0.05)  # a slow socket
+            await real_send(message)
+
+        mgr.websocket.send_json = stalling_send
     session.script = [
         [_text("摸摸头好舒服。"), _text("", "stop")],
         [typed_reply_streams, _text("用户回复。"), _text("", "stop")],
@@ -1170,8 +1181,9 @@ async def test_only_a_finished_displaced_reply_with_text_is_sealed(kind, finishe
     mgr._note_ai_turn = lambda text=None, **_kw: None
     mgr._current_ai_turn_text = text
     mgr._active_text_request_id = "req-new"
-    M._close_displaced_offline_turn(mgr, InterruptedReply(kind, finished=finished))
-    await _drain()
+    followup = M._close_displaced_offline_turn(mgr, InterruptedReply(kind, finished=finished))
+    if followup is not None:
+        await followup()
     assert _system(mgr) == expected
     assert mgr._active_text_request_id == "req-new"
 

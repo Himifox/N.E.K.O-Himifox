@@ -1050,6 +1050,9 @@ class _StreamingMixin:
         # 重试成功的那轮"模型看到了、插件读不到"。
         _turn_tool_bus_frames: list = []
         try:
+            # A displaced reply's frontend notice goes out before this reply
+            # sends anything (see _begin_response_generation).
+            await self._run_displaced_followup()
             reroll_count = 0
             set_call_type("conversation")
 

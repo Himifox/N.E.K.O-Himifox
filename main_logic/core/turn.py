@@ -534,7 +534,7 @@ class TurnMixin:
         self._flush_ai_turn_text_to_tracker()
         return turn_end_msg
 
-    def _close_displaced_offline_turn(self, kind: str = "response") -> None:
+    def _close_displaced_offline_turn(self, kind: str = "response"):
         """``OmniOfflineClient.on_response_displaced``: a user reply began
         over this one without an interruption and handed its close here.
 
@@ -552,11 +552,12 @@ class TurnMixin:
         claim) gets the frontend copy of its turn end: the frontend's current
         bubble is still its own (the new reply has emitted nothing yet), so it
         is sealed there. A bound reply cut mid-stream gets ``turn abandoned``
-        for its request instead. This callback is sync, so the sends run in
-        tasks; they are created before the new reply has even sent its
-        provider request, so they reach the WebSocket before that reply's
-        first chunk can. No TTS done: the new reply streams on the current
-        speech id.
+        for its request instead. This callback is sync, so it returns that
+        send for the client to await right after the begin, before the new
+        reply sends its provider request: it reaches the WebSocket before
+        that reply's first chunk, however long the send itself takes (a
+        task could lose that race). Returns None when there is nothing to
+        send. No TTS done: the new reply streams on the current speech id.
         """
         owner = _taken_over_reply_turn(kind)
         finished = getattr(kind, "finished", False) is True
@@ -566,9 +567,11 @@ class TurnMixin:
         if kind == "response":
             self._turn_wrap_up_owed = True
         if finished and isinstance(turn_end_msg, dict):
-            self._fire_task(self._send_turn_end_to_frontend(turn_end_msg))
-        elif kind == "response" and owner is not None and owner.request_id:
-            self._fire_task(self._send_turn_abandoned(owner.request_id))
+            return lambda: self._send_turn_end_to_frontend(turn_end_msg)
+        if kind == "response" and owner is not None and owner.request_id:
+            request_id = owner.request_id
+            return lambda: self._send_turn_abandoned(request_id)
+        return None
 
     async def handle_proactive_complete(self, content_committed: bool = True):
         """Lightweight completion for proactive (agent callback) replies.

@@ -260,7 +260,10 @@ class OmniOfflineClient(_ToolingMixin, _GenaiMixin, _StreamingMixin, _MediaMixin
         # began over this one without an interruption and took its close over
         # (the owner closes it). on_idle(): the last reply call returned and
         # nothing is left in progress.
-        self.on_response_displaced: Optional[Callable[[str], None]] = None
+        self.on_response_displaced: Optional[Callable[[str], Any]] = None
+        # What on_response_displaced handed back to send before this reply's
+        # first output (see _run_displaced_followup).
+        self._displaced_followup = None
         self.on_idle: Optional[Callable[[], None]] = None
         self._conversation_history = []
         self._instructions = ""
