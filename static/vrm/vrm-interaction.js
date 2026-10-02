@@ -1282,7 +1282,15 @@ class VRMInteraction {
      * 移除时必须使用相同的选项，否则 removeEventListener 不会生效
      */
     cleanupDragAndZoom() {
-        this._cancelGuidedMovement({ invalidateInteraction: true });
+        const interrupted = this._cancelGuidedMovement({ invalidateInteraction: true });
+        // 取消后的异步播放器释放不再拥有一个待保存的到达流程。
+        this._movementFinishingToken = null;
+        // 模型切换/销毁在这里接管移动；同步捕获旧模型的最终姿态，
+        // 无需在每次途中换目标时向共享保存队列追加中间状态。
+        if (interrupted) {
+            const snapshot = this._captureInteractionPreferences();
+            if (snapshot) void this._savePositionAfterInteraction(snapshot);
+        }
         if (this._movementKeyDownHandler) {
             window.removeEventListener('keydown', this._movementKeyDownHandler);
             this._movementKeyDownHandler = null;

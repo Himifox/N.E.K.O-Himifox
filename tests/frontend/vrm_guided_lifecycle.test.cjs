@@ -121,6 +121,29 @@ const vm = require('node:vm');
         f.interaction.cleanupDragAndZoom();
     }
 
+    // Retarget then replace the model before arrival: persist the old model's
+    // stopped pose once, even when display IPC completes after replacement.
+    {
+        const f = fixture(); const writes = capturePreferences(f); const display = deferred();
+        window.electronScreen = { getCurrentDisplay: () => display.promise };
+        f.select(new THREE.Vector3(2, 0, 0)); await flush();
+        f.interaction.update(0.2);
+        f.select(new THREE.Vector3(3, 0, 0)); await flush();
+        f.interaction.update(0.2);
+        const stopped = f.scene.position.clone();
+        assert.ok(stopped.x > 0);
+        f.interaction.cleanupDragAndZoom();
+        f.manager.currentModel = { url: '/model-b.vrm', scene: new THREE.Object3D(), vrm: {} };
+        f.interaction.cleanupDragAndZoom();
+        display.resolve({ id: 1 }); await flush();
+        assert.equal(writes.length, 2, 'departure plus one cleanup save, no retarget or duplicate cleanup writes');
+        assert.equal(writes[1][0], '/model-a.vrm');
+        assert.deepEqual({ ...writes[1][1] }, { x: stopped.x, y: stopped.y, z: stopped.z });
+        assert.equal(f.manager.currentModel.scene.position.x, 0);
+        assert.equal(f.leases.size, 0);
+        window.electronScreen = null;
+    }
+
     // Existing external playback survives translation, arrival and cancellation.
     for (const cancel of [false, true]) {
         const f = fixture(); let plays = 0; let stops = 0; let boosts = 0;
