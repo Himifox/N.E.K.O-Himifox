@@ -625,14 +625,19 @@ class VRMInteraction {
         const target = this.moveTarget;
         const scratch = this._getMovementScratch();
         const offset = scratch.offset.copy(target).sub(scene.position);
-        const distance = offset.length();
+        let distance = offset.length();
         if (!Number.isFinite(distance) || distance <= this.movementArrivalThreshold) {
             // 到达时再按当前视口约束，覆盖选点后切屏/缩窗的尺寸变化。
             this._revalidateMovementTarget();
-            scene.position.copy(target);
-            this.movementVelocity = 0;
-            void this._finishMovement();
-            return;
+            distance = offset.copy(target).sub(scene.position).length();
+            // 重新约束可能产生另一个落点，继续正常移动而不是瞬移到新目标。
+            if (!Number.isFinite(distance)) return;
+            if (distance <= this.movementArrivalThreshold) {
+                scene.position.copy(target);
+                this.movementVelocity = 0;
+                void this._finishMovement();
+                return;
+            }
         }
         const dt = Math.max(0, Number(delta) || 0);
         const maxSpeed = Math.max(0, Math.min(0.9, Number(this.movementMaxSpeed) || 0));

@@ -616,6 +616,12 @@ const vm = require('node:vm');
         // Arrival also guards targets when a resize notification was missed.
         f.interaction.moveTarget.x = 5; f.scene.position.x = 5;
         f.interaction._updateGuidedMovement(1 / 60); await flush();
+        assert.equal(f.interaction.moveTarget.x, 1);
+        assert.ok(f.scene.position.x >= 5 - 0.9 / 60, 'revalidated arrival must respect the movement speed bound');
+        assert.equal(f.interaction.isMoving, true); assert.equal(f.saves.length, saves);
+        assert.equal(f.interaction.movementToken, token);
+        f.scene.position.copy(f.interaction.moveTarget);
+        f.interaction._updateGuidedMovement(1 / 60); await flush();
         assert.equal(f.scene.position.x, 1); assert.equal(f.interaction.isMoving, false);
         f.interaction.cleanupDragAndZoom(); await flush();
         delete window.__NEKO_MULTI_WINDOW__;
