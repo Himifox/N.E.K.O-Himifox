@@ -53,12 +53,34 @@ async function playFixture(vrmVersion, options, rejectCoverage = false) {
         assert.equal(configuredClip, undefined);
         return;
     }
-    assert.equal(await animation.playVRMAAnimation('/fixture.vrma', options), true);
+    let startedAction;
+    assert.equal(await animation.playVRMAAnimation('/fixture.vrma', {
+        ...options, onStarted: nextAction => { startedAction = nextAction; }
+    }), true);
     assert.equal(playedAction, action);
+    assert.equal(startedAction, action);
     return { configuredClip, tracks, rootPositions, handPosition, rotations, hipsPosition };
 }
 
 (async () => {
+    // Stopping a specific walk must leave a newer loading request valid, and
+    // must do nothing after the dance has replaced that walk.
+    {
+        const animation = new global.VRMAnimation({}); const walk = { paused: true }; const dance = {};
+        let released = 0;
+        animation._releaseMixerAction = action => { assert.equal(action, walk); released++; };
+        animation._restorePhysics = () => {};
+        animation.currentAction = walk; animation._playRequestGeneration = 7;
+        animation.stopVRMAAnimation({ expectedAction: walk, preservePending: true });
+        assert.equal(released, 1); assert.equal(animation.currentAction, null);
+        assert.equal(animation._playRequestGeneration, 7, 'pending dance request stays valid');
+        animation.currentAction = dance;
+        animation.stopVRMAAnimation({ expectedAction: walk, preservePending: true });
+        assert.equal(animation.currentAction, dance); assert.equal(released, 1);
+        assert.equal(animation._playRequestGeneration, 7);
+        animation.currentAction = null; animation.stopVRMAAnimation();
+        assert.equal(animation._playRequestGeneration, 8, 'ordinary stop still cancels pending loads');
+    }
     for (const vrmVersion of ['0.0', '1.0']) {
         // Low quality / disabled physics skips vrm.update(); mixer playback must
         // still synchronize normalized bones even when its root is the scene.

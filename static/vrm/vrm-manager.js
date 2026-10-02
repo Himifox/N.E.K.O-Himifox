@@ -1763,8 +1763,8 @@ class VRMManager {
         return false;
     }
 
-    stopVRMAAnimation() {
-        if (this.animation) this.animation.stopVRMAAnimation();
+    stopVRMAAnimation(options) {
+        if (this.animation) return this.animation.stopVRMAAnimation(options);
     }
     onWindowResize() {
         if (!this.camera || !this.renderer) return;

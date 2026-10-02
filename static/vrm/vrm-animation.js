@@ -773,6 +773,7 @@ class VRMAnimation {
             // 新 action 已验证并准备播放后才提交播放分类。
             this.isIdleAnimation = !!options.isIdle;
             this._playAction(newAction, options, vrm);
+            if (typeof options.onStarted === 'function') options.onStarted(newAction);
             return true;
 
         } catch (error) {
@@ -783,11 +784,12 @@ class VRMAnimation {
         }
     }
 
-    stopVRMAAnimation() {
+    stopVRMAAnimation({ expectedAction = null, preservePending = false } = {}) {
+        if (expectedAction && this.currentAction !== expectedAction) return false;
         // A stop must also cancel a request that is still fetching/parsing and
         // has not created currentAction yet. Direct callers do not provide the
         // motion player's shouldApply guard, so generation is the shared gate.
-        this._playRequestGeneration += 1;
+        if (!preservePending || !expectedAction) this._playRequestGeneration += 1;
         if (this._fadeTimer) {
             clearTimeout(this._fadeTimer);
             this._fadeTimer = null;

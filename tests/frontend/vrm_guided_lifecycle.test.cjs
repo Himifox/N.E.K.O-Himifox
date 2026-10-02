@@ -108,6 +108,27 @@ const vm = require('node:vm');
         f.interaction.cleanupDragAndZoom();
     }
 
+    // A held-but-loading dance allows stopping only the walk instance; an
+    // already-started dance must survive the same movement completion.
+    for (const danceStarted of [false, true]) {
+        const f = fixture(); const walk = {}; const dance = {}; let currentAction; let stopped = 0;
+        f.manager.playVRMAAnimation = async (_path, options) => {
+            currentAction = walk; options.onStarted(walk); return true;
+        };
+        f.manager.stopVRMAAnimation = options => {
+            assert.equal(options.expectedAction, walk); assert.equal(options.preservePending, true);
+            if (currentAction === options.expectedAction) { currentAction = null; stopped++; }
+        };
+        f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        f.leases.set('jukebox', 'song-loading');
+        if (danceStarted) currentAction = dance;
+        f.interaction._cancelGuidedMovement(); await flush();
+        assert.equal(stopped, danceStarted ? 0 : 1);
+        assert.equal(currentAction, danceStarted ? dance : null);
+        assert.equal(f.leases.size, 1); assert.equal(f.rests(), 0);
+        f.interaction.cleanupDragAndZoom();
+    }
+
     // The idle governor sees pure movement and arrival turns without a walk clip.
     {
         const manager = Object.create(window.VRMManager.prototype);

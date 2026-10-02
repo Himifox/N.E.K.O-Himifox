@@ -122,6 +122,7 @@ class VRMInteraction {
         this._movementRestRotationY = null;
         this.movementArrivalThreshold = 0.012;
         this._movementAction = null;
+        this._movementPlaybackAction = null;
         this._movementRestOwner = 'guided-movement';
         this._movementOwnerToken = null;
         this._movementFinishingToken = null;
@@ -480,6 +481,9 @@ class VRMInteraction {
             immediate: options.immediate === true,
             isIdle: false,
             movement: true,
+            onStarted: playbackAction => {
+                if (token === this.movementToken && this.isMoving) this._movementPlaybackAction = playbackAction;
+            },
             shouldApply: () => token === this.movementToken && this.isMoving
                 && !window.NekoMotion?.hasOtherExternalPlayback?.(this._movementRestOwner)
         });
@@ -520,6 +524,7 @@ class VRMInteraction {
     async _finishMovement({ cancel = false } = {}) {
         if (!this.isMoving && !this._movementAction && this._movementOwnerToken === null) return;
         const endedOwnerToken = this._movementOwnerToken;
+        const endedPlaybackAction = this._movementPlaybackAction;
         this.isMoving = false;
         this._movementFacingProfile = null;
         this.moveTarget = null;
@@ -528,6 +533,7 @@ class VRMInteraction {
         this._movementFinishingToken = endedToken;
         const endedScene = this.manager.currentModel?.scene;
         this._movementAction = null;
+        this._movementPlaybackAction = null;
         this._movementOwnerToken = null;
         const restFacing = this._movementRestRotationY;
         this._movementRestRotationY = null;
@@ -537,8 +543,12 @@ class VRMInteraction {
         try {
             // 当前两套目标模型对 stop/turn clip 的骨骼兼容性还不稳定；到达时先安全
             // 停止循环走路并恢复 humanoid/rest，避免连续切换多个 clip 触发 T-pose。
-            if (endedOwnerToken && !motion?.hasOtherExternalPlayback?.(this._movementRestOwner)
-                && this.manager && typeof this.manager.stopVRMAAnimation === 'function') this.manager.stopVRMAAnimation();
+            if (endedOwnerToken && this.manager && typeof this.manager.stopVRMAAnimation === 'function') {
+                if (!motion?.hasOtherExternalPlayback?.(this._movementRestOwner)) this.manager.stopVRMAAnimation();
+                else if (endedPlaybackAction) {
+                    this.manager.stopVRMAAnimation({ expectedAction: endedPlaybackAction, preservePending: true });
+                }
+            }
         } catch (error) {
             console.warn('[VRM Interaction] 引导移动结束时停止动作失败:', error);
         }
