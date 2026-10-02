@@ -593,6 +593,34 @@ const vm = require('node:vm');
         delete window.NekoAvatarMultiScreenDragHint;
     }
 
+    // A new movement revalidates its own target after either window resize path,
+    // without changing the live position, token or persisting an intermediate pose.
+    for (const multiWindow of [false, true]) {
+        const f = fixture();
+        f.select(new THREE.Vector3(5, 0, 0)); await flush();
+        const token = f.interaction.movementToken; const saves = f.saves.length;
+        const position = f.scene.position.clone();
+        window.__NEKO_MULTI_WINDOW__ = multiWindow;
+        f.manager.container = { clientWidth: 640, clientHeight: 1080 };
+        let resized = false;
+        f.manager.renderer.setSize = (width, height) => { assert.equal(width, 640); assert.equal(height, 1080); resized = true; };
+        f.manager.interaction = f.interaction;
+        f.interaction.clampModelPosition = target => {
+            assert.equal(resized, true); assert.equal(f.manager.camera.aspect, 640 / 1080);
+            target.x = Math.min(target.x, 1); return target;
+        };
+        window.VRMManager.prototype.onWindowResize.call(f.manager);
+        assert.equal(f.interaction.moveTarget.x, 1);
+        assert.ok(f.scene.position.equals(position)); assert.equal(f.saves.length, saves);
+        assert.equal(f.interaction.movementToken, token);
+        // Arrival also guards targets when a resize notification was missed.
+        f.interaction.moveTarget.x = 5; f.scene.position.x = 5;
+        f.interaction._updateGuidedMovement(1 / 60); await flush();
+        assert.equal(f.scene.position.x, 1); assert.equal(f.interaction.isMoving, false);
+        f.interaction.cleanupDragAndZoom(); await flush();
+        delete window.__NEKO_MULTI_WINDOW__;
+    }
+
     // Idle dragging does not invalidate the interaction token every frame.
     {
         const f = fixture(); f.interaction.isDragging = true;

@@ -606,6 +606,12 @@ class VRMInteraction {
         return true;
     }
 
+    _revalidateMovementTarget() {
+        if (!this.isMoving || !this.moveTarget || this.isDragging) return;
+        const target = this.clampModelPosition(this.moveTarget.clone());
+        if (target?.isVector3) this.moveTarget.copy(target);
+    }
+
     _updateGuidedMovement(delta) {
         if (this.isDragging) {
             if (this.isMoving || this._movementAction || this._movementOwnerToken !== null
@@ -621,6 +627,8 @@ class VRMInteraction {
         const offset = scratch.offset.copy(target).sub(scene.position);
         const distance = offset.length();
         if (!Number.isFinite(distance) || distance <= this.movementArrivalThreshold) {
+            // 到达时再按当前视口约束，覆盖选点后切屏/缩窗的尺寸变化。
+            this._revalidateMovementTarget();
             scene.position.copy(target);
             this.movementVelocity = 0;
             void this._finishMovement();

@@ -1787,6 +1787,7 @@ class VRMManager {
             this.renderer.setSize(visibleWidth, visibleHeight, false);
             this.renderer.domElement.style.width = visibleWidth + 'px';
             this.renderer.domElement.style.height = visibleHeight + 'px';
+            this.interaction?._revalidateMovementTarget();
             return;
         }
 
@@ -1801,6 +1802,7 @@ class VRMManager {
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(width, height);
+        this.interaction?._revalidateMovementTarget();
     }
     getCurrentModel() {
         return this.currentModel;
