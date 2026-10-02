@@ -1924,6 +1924,9 @@ class VRMManager {
         // 4. 清理阴影资源
         this._disposeShadowResources();
 
+        // 模型仍可读取时停止交互并入队最终快照；core.disposeVRM 会清空 currentModel。
+        this.interaction?.cleanupDragAndZoom?.();
+
         // 5. 清理模型资源（调用 core.disposeVRM）
         if (this.core && typeof this.core.disposeVRM === 'function') {
             await this.core.disposeVRM();
@@ -1955,10 +1958,6 @@ class VRMManager {
             if (this.interaction._initTimerId) {
                 clearTimeout(this.interaction._initTimerId);
                 this.interaction._initTimerId = null;
-            }
-            // 清理交互模块的拖拽和缩放事件监听器
-            if (typeof this.interaction.cleanupDragAndZoom === 'function') {
-                this.interaction.cleanupDragAndZoom();
             }
         }
 

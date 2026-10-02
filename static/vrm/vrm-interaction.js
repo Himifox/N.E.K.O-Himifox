@@ -590,7 +590,20 @@ class VRMInteraction {
         this._movementFinishingToken = null;
         this.movementToken += 1;
         // 仅新行程保存出发状态；途中换目标和原地点选不占用保存队列。
-        if (Number.isFinite(pendingRestYaw)) this._movementRestRotationY = pendingRestYaw;
+        if (Number.isFinite(pendingRestYaw)) {
+            this._movementRestRotationY = pendingRestYaw;
+            if (willMove) {
+                const snapshot = this._captureInteractionPreferences();
+                if (snapshot) {
+                    // 上一段已到达：只在快照中补完目标朝向，场景继续平滑转向新目标。
+                    const finalPose = new THREE.Object3D();
+                    finalPose.quaternion.copy(scene.quaternion);
+                    this._setSceneYaw(finalPose, pendingRestYaw);
+                    snapshot.rotation = { x: finalPose.rotation.x, y: finalPose.rotation.y, z: finalPose.rotation.z };
+                    void this._savePositionAfterInteraction(snapshot);
+                }
+            }
+        }
         else if (willMove && !this.isMoving) void this._savePositionAfterInteraction();
         if (!willMove) {
             void this._finishMovement();

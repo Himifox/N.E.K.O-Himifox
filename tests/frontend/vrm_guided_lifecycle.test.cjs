@@ -144,6 +144,50 @@ const vm = require('node:vm');
         window.electronScreen = null;
     }
 
+    // Starting a new trip during arrival persists the prior endpoint with its
+    // intended yaw, without writing the half-turned pose or changing the scene.
+    {
+        const f = fixture(); const writes = capturePreferences(f);
+        f.scene.rotation.set(0.15, 0.3, -0.1);
+        const restPose = f.scene.quaternion.clone();
+        f.select(new THREE.Vector3(1, 0, 0)); await flush();
+        f.scene.position.copy(f.interaction.moveTarget);
+        f.interaction._rotateSceneYaw(f.scene, 1);
+        const ending = f.interaction._finishMovement(); await flush();
+        for (const [id, callback] of [...frames]) { frames.delete(id); callback(150); }
+        const halfTurn = f.scene.quaternion.clone();
+        f.select(new THREE.Vector3(3, 0, 0)); await flush(); await ending;
+        assert.equal(writes.length, 2, 'departure plus previous endpoint');
+        assert.deepEqual({ ...writes[1][1] }, { x: 1, y: 0, z: 0 });
+        const restored = new THREE.Object3D(); const rotation = writes[1][3];
+        restored.rotation.set(rotation.x, rotation.y, rotation.z);
+        assert.ok(restored.quaternion.angleTo(restPose) < 1e-7);
+        assert.ok(f.scene.quaternion.angleTo(halfTurn) < 1e-7, 'snapshot correction must not jump the visible pose');
+        for (let i = 0; i < 3; i++) f.select(new THREE.Vector3(4 + i, 0, 0));
+        await flush(); assert.equal(writes.length, 2, 'ordinary retargets still do not write');
+        f.interaction.cleanupDragAndZoom(); await flush();
+    }
+    // Full manager disposal must enqueue the old pose before core clears it.
+    {
+        const f = fixture(); const writes = capturePreferences(f);
+        f.manager.interaction = f.interaction;
+        f.manager._stopIdleFpsGovernor = () => {};
+        f.manager._disposeShadowResources = () => {};
+        f.manager.renderer.dispose = () => {};
+        f.manager.core.disposeVRM = async () => {
+            assert.equal(f.interaction.isMoving, false, 'interaction stops before model disposal');
+            f.manager.currentModel = null;
+        };
+        f.select(new THREE.Vector3(2, 0, 0)); await flush();
+        f.interaction.update(0.2); const stopped = f.scene.position.clone();
+        await window.VRMManager.prototype.dispose.call(f.manager); await flush();
+        assert.equal(writes.length, 2);
+        assert.equal(writes[1][0], '/model-a.vrm');
+        assert.deepEqual({ ...writes[1][1] }, { x: stopped.x, y: stopped.y, z: stopped.z });
+        assert.equal(f.manager.currentModel, null); assert.equal(f.leases.size, 0);
+        assert.equal(frames.size, 0);
+    }
+
     // Existing external playback survives translation, arrival and cancellation.
     for (const cancel of [false, true]) {
         const f = fixture(); let plays = 0; let stops = 0; let boosts = 0;
