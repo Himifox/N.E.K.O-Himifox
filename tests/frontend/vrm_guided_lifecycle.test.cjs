@@ -555,13 +555,23 @@ const vm = require('node:vm');
     }
     for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
         const f = fixture(); let prevented = false;
-        f.interaction._movementKeyDownHandler({ key: 'f', [modifier]: true,
+        f.interaction._movementKeyDownHandler({ key: 'f', code: 'KeyF', [modifier]: true,
             preventDefault() { prevented = true; } });
         assert.equal(f.interaction.targetMode, false); assert.equal(prevented, false);
-        f.interaction._movementKeyDownHandler({ key: 'f', preventDefault() { prevented = true; } });
+        f.interaction._movementKeyDownHandler({ key: 'f', code: 'KeyF', preventDefault() { prevented = true; } });
         assert.equal(f.interaction.targetMode, true); assert.equal(prevented, true);
-        f.interaction._movementKeyUpHandler({ key: 'f' });
+        f.interaction._movementKeyUpHandler({ key: 'f', code: 'KeyF' });
         assert.equal(f.interaction.targetMode, false); f.interaction.cleanupDragAndZoom();
+    }
+    for (const key of ['а', 'φ', 'F']) {
+        const f = fixture();
+        f.interaction._movementKeyDownHandler({ key, code: 'KeyF', preventDefault() {} });
+        assert.equal(f.interaction.targetMode, true, 'physical F works across layouts');
+        f.interaction._movementKeyUpHandler({ key, code: 'KeyF' });
+        assert.equal(f.interaction.targetMode, false);
+        f.interaction._movementKeyDownHandler({ key: 'f', code: 'KeyA', preventDefault() {} });
+        assert.equal(f.interaction.targetMode, false, 'another physical key cannot activate F');
+        f.interaction.cleanupDragAndZoom();
     }
     // Arrival scheduling uses the shared paced-frame hook, including cancellation.
     {
@@ -816,13 +826,13 @@ const vm = require('node:vm');
     // F mode survives enter and hover, and clears on blur or release.
     {
         const f = fixture(); const canvas = f.manager.renderer.domElement;
-        f.interaction._movementKeyDownHandler({ key: 'f', preventDefault() {} });
+        f.interaction._movementKeyDownHandler({ key: 'f', code: 'KeyF', preventDefault() {} });
         f.interaction.mouseEnterHandler(); f.interaction.mouseHoverHandler({ clientX: 0, clientY: 0 });
         assert.equal(canvas.style.cursor, 'crosshair');
         f.interaction._movementBlurHandler();
         assert.equal(f.interaction.targetMode, false); assert.equal(canvas.style.cursor, 'default');
-        f.interaction._movementKeyDownHandler({ key: 'f', preventDefault() {} });
-        f.interaction._movementKeyUpHandler({ key: 'f' });
+        f.interaction._movementKeyDownHandler({ key: 'f', code: 'KeyF', preventDefault() {} });
+        f.interaction._movementKeyUpHandler({ key: 'f', code: 'KeyF' });
         assert.equal(canvas.style.cursor, 'default');
         f.interaction.cleanupDragAndZoom();
     }
@@ -830,10 +840,10 @@ const vm = require('node:vm');
     // IME composing F events must remain available to the input method.
     for (const composing of [{ isComposing: true }, { keyCode: 229 }]) {
         const f = fixture(); let prevented = false;
-        f.interaction._movementKeyDownHandler({ key: 'f', ...composing, preventDefault() { prevented = true; } });
+        f.interaction._movementKeyDownHandler({ key: 'f', code: 'KeyF', ...composing, preventDefault() { prevented = true; } });
         assert.equal(f.interaction.targetMode, false);
         assert.equal(prevented, false);
-        f.interaction._movementKeyDownHandler({ key: 'f', preventDefault() {} });
+        f.interaction._movementKeyDownHandler({ key: 'f', code: 'KeyF', preventDefault() {} });
         assert.equal(f.interaction.targetMode, true, 'ordinary F still selects a target');
         f.interaction.cleanupDragAndZoom();
     }

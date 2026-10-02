@@ -387,6 +387,11 @@ class VRMInteraction {
 
     _getSceneYaw(scene) {
         const forward = this._getMovementScratch().forward.set(0, 0, 1).applyQuaternion(scene.quaternion);
+        if (forward.x * forward.x + forward.z * forward.z <= 1e-8) {
+            // 正面接近竖直时，用仍有水平投影的局部右轴确定朝向。
+            forward.set(1, 0, 0).applyQuaternion(scene.quaternion);
+            return Math.atan2(-forward.z, forward.x);
+        }
         return Math.atan2(forward.x, forward.z);
     }
 
@@ -783,14 +788,14 @@ class VRMInteraction {
             if (e.isComposing || e.keyCode === 229) return;
             if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (this._isEditableTarget(e.target)) return;
-            if (String(e.key || '').toLowerCase() !== 'f') return;
+            if (e.code !== 'KeyF') return;
             if (this.checkLocked() || isYuiGuideDragLocked()) return;
             this.targetMode = true;
             canvas.style.cursor = 'crosshair';
             e.preventDefault();
         };
         this._movementKeyUpHandler = (e) => {
-            if (String(e.key || '').toLowerCase() !== 'f') return;
+            if (e.code !== 'KeyF') return;
             this.targetMode = false;
             if (!this.isDragging && canvas) canvas.style.cursor = 'default';
         };

@@ -163,4 +163,18 @@ for (const version of ['0.0', '1.0']) {
     }
 }
 console.log('VRM repeated movement at 60 FPS: OK');
+// A nearly vertical local forward axis must not stall guided movement.
+for (const pitch of [Math.PI / 2, -Math.PI / 2, Math.PI / 2 - 1e-7]) {
+    const scene = new Object3D(); scene.rotation.set(pitch, 0, 0);
+    const interaction = new Interaction({ currentModel: { scene, vrm: {} }, core: { vrmVersion: '1.0' },
+        camera: { position: new Vector3(0, 0, 5), quaternion: new Quaternion(),
+            getWorldDirection(v) { return v.set(0, 0, -1); } } });
+    interaction._rotateSceneYaw(scene, 0.7);
+    assert.ok(Math.abs(interaction._getSceneYaw(scene) - 0.7) < 1e-8);
+    const tilt = new Vector3(0, 0, 1).applyQuaternion(scene.quaternion).y;
+    interaction.isMoving = true; interaction.moveTarget = new Vector3(10, 0, 0);
+    for (let i = 0; i < 120; i++) interaction._updateGuidedMovement(1 / 60);
+    assert.ok(scene.position.x > 0, 'vertical pose still turns and moves');
+    assert.ok(Math.abs(new Vector3(0, 0, 1).applyQuaternion(scene.quaternion).y - tilt) < 1e-8);
+}
 })().catch(error => { console.error(error); process.exitCode = 1; });
