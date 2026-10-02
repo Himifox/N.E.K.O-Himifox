@@ -69,6 +69,58 @@ const vm = require('node:vm');
         return writes;
     }
 
+    // Locking during a real drag rebound keeps its final position and save.
+    {
+        const f = fixture();
+        f.scene.position.x = 2;
+        f.interaction.isDragging = true; f.interaction.dragMode = 'pan';
+        f.interaction._checkAndSwitchDisplay = async () => false;
+        f.interaction._recordDragHintPointerEdgeRelease = async () => false;
+        f.interaction.clampModelPosition = position => position.set(1, 0, 0);
+        f.interaction._snapModelIntoScreen = window.VRMInteraction.prototype._snapModelIntoScreen;
+        const ending = f.interaction._endDrag(); await flush();
+        const token = f.interaction.movementToken;
+        for (const [id, callback] of [...frames]) { frames.delete(id); callback(26); }
+        assert.ok(f.scene.position.x > 1 && f.scene.position.x < 2);
+        f.interaction.setLocked(true);
+        assert.equal(f.interaction.movementToken, token);
+        finishTurn(); await ending;
+        assert.equal(f.scene.position.x, 1);
+        assert.equal(f.saves.length, 1, 'rebound completion must persist exactly once');
+        f.interaction.cleanupDragAndZoom();
+    }
+    // Explicit position writers still invalidate a pending rebound.
+    for (const method of ['setModelPosition', 'resetModelPosition']) {
+        const f = fixture(); f.manager.interaction = f.interaction;
+        f.manager.currentModel.vrm.scene = f.scene;
+        f.manager.setModelScaleScalar = () => {};
+        f.scene.position.x = 2;
+        const snapping = f.interaction._animateModelToPosition(f.scene.position.clone(), new THREE.Vector3(1, 0, 0));
+        if (method === 'setModelPosition') window.VRMManager.prototype[method].call(f.manager, 3, 2, 1);
+        else window.VRMManager.prototype[method].call(f.manager);
+        const position = f.scene.position.clone(); finishTurn();
+        assert.equal(await snapping, false);
+        assert.ok(f.scene.position.equals(position), 'old rebound must not overwrite the new position');
+        f.interaction.cleanupDragAndZoom();
+    }
+    // Rapid retargeting queues only the departure and eventual arrival saves.
+    {
+        const f = fixture();
+        f.select(f.scene.position.clone()); await flush();
+        assert.equal(f.saves.length, 0, 'stationary selections need no write');
+        f.select(new THREE.Vector3(2, 0, 0)); await flush();
+        for (let i = 0; i < 10; i++) {
+            f.interaction.update(1 / 60);
+            f.select(new THREE.Vector3(2 + i / 10, 0, 0)); await flush();
+        }
+        assert.equal(f.saves.length, 1, 'retargets must not queue intermediate poses');
+        f.scene.position.copy(f.interaction.moveTarget);
+        f.interaction.update(1 / 60); await flush();
+        if (frames.size) finishTurn(); await flush();
+        assert.equal(f.saves.length, 2, 'arrival still persists the final pose');
+        f.interaction.cleanupDragAndZoom();
+    }
+
     // Existing external playback survives translation, arrival and cancellation.
     for (const cancel of [false, true]) {
         const f = fixture(); let plays = 0; let stops = 0; let boosts = 0;

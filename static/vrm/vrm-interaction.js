@@ -274,7 +274,7 @@ class VRMInteraction {
         if (!scene || !camera || !renderer || !THREE) return false;
         if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return false;
 
-        this._cancelGuidedMovement();
+        this._cancelGuidedMovement({ invalidateInteraction: true });
         const center = this._getProjectedModelCenterInWindow();
         if (!center) return false;
 
@@ -413,9 +413,12 @@ class VRMInteraction {
         }
     }
 
-    _cancelGuidedMovement() {
+    _cancelGuidedMovement({ invalidateInteraction = false } = {}) {
         const interrupted = this.isMoving || !!this._movementAction || this._movementOwnerToken !== null
             || this._movementFinishingToken !== null || this._smoothFacingFrame !== null;
+        // 无移动可取消时，锁定等操作不应打断拖拽释放后的回弹和保存。
+        // 真正写入位置或开始新交互的调用方仍需使旧异步收尾失效。
+        if (!interrupted && !invalidateInteraction) return false;
         const scene = this.manager.currentModel?.scene;
         const targetYaw = this._smoothFacingTargetYaw;
         this._cancelSmoothFacing();
@@ -586,9 +589,9 @@ class VRMInteraction {
         this._smoothFacingTargetYaw = null;
         this._movementFinishingToken = null;
         this.movementToken += 1;
-        // 目标替换/开始移动前只保存一次当前状态，避免在每帧推进时写配置。
-        if (!Number.isFinite(pendingRestYaw)) void this._savePositionAfterInteraction();
-        else this._movementRestRotationY = pendingRestYaw;
+        // 仅新行程保存出发状态；途中换目标和原地点选不占用保存队列。
+        if (Number.isFinite(pendingRestYaw)) this._movementRestRotationY = pendingRestYaw;
+        else if (willMove && !this.isMoving) void this._savePositionAfterInteraction();
         if (!willMove) {
             void this._finishMovement();
             return true;
@@ -819,7 +822,7 @@ class VRMInteraction {
                     return; // 未命中模型，不拦截事件
                 }
                 // 普通拖拽接管模型时，取消尚未完成的自动移动；目标模式下的左键选点已在上方返回。
-                this._cancelGuidedMovement();
+                this._cancelGuidedMovement({ invalidateInteraction: true });
                 this.isDragging = true;
                 this.dragMode = 'pan';
                 // 同步升频：不等 300ms governor 轮询，消除拖拽起步的 30fps 顿挫
@@ -835,7 +838,7 @@ class VRMInteraction {
                 // 开始拖动时，临时禁用按钮的 pointer-events
                 this._disableButtonPointerEvents();
             } else if (e.button === 2) { // 右键 - 模型旋转
-                this._cancelGuidedMovement();
+                this._cancelGuidedMovement({ invalidateInteraction: true });
                 this.isDragging = true;
                 this.dragMode = 'orbit';
                 if (typeof this.manager._boostInteractiveFPS === 'function') this.manager._boostInteractiveFPS();
@@ -1279,7 +1282,7 @@ class VRMInteraction {
      * 移除时必须使用相同的选项，否则 removeEventListener 不会生效
      */
     cleanupDragAndZoom() {
-        this._cancelGuidedMovement();
+        this._cancelGuidedMovement({ invalidateInteraction: true });
         if (this._movementKeyDownHandler) {
             window.removeEventListener('keydown', this._movementKeyDownHandler);
             this._movementKeyDownHandler = null;

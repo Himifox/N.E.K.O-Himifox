@@ -1232,7 +1232,7 @@ class VRMManager {
         const THREE = window.THREE;
         const vrm = model.vrm || model;
 
-        this.interaction?._cancelGuidedMovement();
+        this.interaction?._cancelGuidedMovement({ invalidateInteraction: true });
 
         // 1) 先复位模型的位置与旋转
         scene.position.set(0, 0, 0);
@@ -1812,7 +1812,7 @@ class VRMManager {
     }
     setModelPosition(x, y, z) {
         if (!this.currentModel?.vrm?.scene) return;
-        this.interaction?._cancelGuidedMovement();
+        this.interaction?._cancelGuidedMovement({ invalidateInteraction: true });
         this.currentModel.vrm.scene.position.set(x, y, z);
     }
 
