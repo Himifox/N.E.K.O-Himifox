@@ -5,6 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from fastapi.responses import JSONResponse
+import pytest
+
+pytestmark = pytest.mark.unit_fast
 
 
 def test_animation_endpoint_excludes_only_bundled_movement(tmp_path):

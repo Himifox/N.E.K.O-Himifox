@@ -553,8 +553,8 @@ const vm = require('node:vm');
         assert.equal(f.interaction.isMoving, true);
         f.interaction.cleanupDragAndZoom(); await flush();
     }
-    // Once Electron moved the window, takeover still reports success and keeps
-    // the current model visible without cancelling the new movement.
+    // Once Electron moved the window, takeover still reports success without
+    // changing or persisting the position owned by the new movement.
     for (const stage of ['ipc', 'frame', 'snap']) {
         const f = fixture(); const pending = deferred(); let successes = 0;
         f.scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial()));
@@ -586,8 +586,8 @@ const vm = require('node:vm');
             for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
         }
         assert.equal(await checking, true, stage);
-        assert.equal(successes, 1); assert.equal(f.scene.position.x, 1);
-        assert.equal(f.saves.length, saves + 1);
+        assert.equal(successes, 1); assert.equal(f.scene.position.x, 10);
+        assert.equal(f.saves.length, saves);
         assert.equal(f.interaction.isMoving, true); assert.equal(f.interaction.movementToken, token);
         f.interaction.cleanupDragAndZoom(); await flush();
         delete window.NekoAvatarMultiScreenDragHint;

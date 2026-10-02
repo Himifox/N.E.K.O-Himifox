@@ -1614,15 +1614,6 @@ class VRMInteraction {
         };
         let displaySwitchAttempted = false;
         let displaySwitched = false;
-        const finishTransferredDisplay = () => {
-            // IPC 已改变窗口，不能再返回“未切屏”。仅约束当前位置，不取消新交互。
-            if (this.manager.currentModel?.scene === scene) {
-                const position = this.clampModelPosition(scene.position.clone());
-                if (position?.isVector3) scene.position.copy(position);
-                void this._savePositionAfterInteraction();
-            }
-            return true;
-        };
 
         try {
             // 1. 计算模型在当前窗口中的屏幕空间中心点（像素）
@@ -1762,7 +1753,8 @@ class VRMInteraction {
             if (typeof window.NekoAvatarMultiScreenDragHint?.markDisplaySwitchSuccess === 'function') {
                 window.NekoAvatarMultiScreenDragHint.markDisplaySwitchSuccess('vrm');
             }
-            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return finishTransferredDisplay();
+            // 窗口切换已经提交；新交互拥有模型位置和持久化，旧流程只报告切屏成功。
+            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return true;
             console.log('[VRM] 屏幕切换成功:', result);
 
             // 5. 将模型在世界坐标中偏移，使拖拽抓取点落到释放鼠标的位置。
@@ -1775,7 +1767,7 @@ class VRMInteraction {
 
             // 6. 等待一帧让新窗口尺寸生效，再执行回弹与保存
             await new Promise(resolve => requestAnimationFrame(resolve));
-            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return finishTransferredDisplay();
+            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return true;
             this._moveModelCenterToWindowPoint(desiredModelCenterX, desiredModelCenterY);
             interactionToken.value = this.movementToken;
 
@@ -1785,7 +1777,7 @@ class VRMInteraction {
                 const snapping = this._snapModelIntoScreen({ animate: true });
                 interactionToken.value = this.movementToken;
                 await snapping;
-                if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return finishTransferredDisplay();
+                if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return true;
                 await this._savePositionAfterInteraction();
             }
 
