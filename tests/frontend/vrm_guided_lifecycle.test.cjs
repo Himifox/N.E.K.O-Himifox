@@ -528,6 +528,55 @@ const vm = require('node:vm');
         assert.equal(f.interaction.isMoving, true);
         f.interaction.cleanupDragAndZoom(); await flush();
     }
+    // Once Electron moved the window, takeover still reports success and keeps
+    // the current model visible without cancelling the new movement.
+    for (const stage of ['ipc', 'frame', 'snap']) {
+        const f = fixture(); const pending = deferred(); let successes = 0;
+        f.scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial()));
+        f.manager.currentModel.vrm.scene = f.scene;
+        f.manager.renderer.domElement.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1920, height: 1080 });
+        f.manager.camera.updateMatrixWorld();
+        if (stage === 'snap') f.scene.position.x = 4;
+        else f.interaction._lastPanDragPointerScreen = { x: 2000, y: 500 };
+        window.NekoAvatarMultiScreenDragHint = { markDisplaySwitchSuccess() { successes++; } };
+        window.electronScreen = {
+            getAllDisplays: async () => [
+                { id: 1, screenX: 0, screenY: 0, width: 1920, height: 1080 },
+                { id: 2, screenX: 1920, screenY: 0, width: 1920, height: 1080 }],
+            getCurrentDisplay: async () => ({ screenX: 0, screenY: 0 }),
+            moveWindowToDisplay: async () => stage === 'ipc' ? pending.promise : { success: true }
+        };
+        f.interaction._snapModelIntoScreen = async () => pending.promise;
+        const checking = f.interaction._checkAndSwitchDisplay(); await flush();
+        if (stage === 'snap') {
+            for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
+            await flush();
+        }
+        f.select(new THREE.Vector3(0, 5, 0)); await flush();
+        const token = f.interaction.movementToken; const saves = f.saves.length;
+        f.scene.position.x = 10;
+        f.interaction.clampModelPosition = position => { position.x = 1; return position; };
+        pending.resolve({ success: true });
+        if (stage === 'frame') {
+            for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
+        }
+        assert.equal(await checking, true, stage);
+        assert.equal(successes, 1); assert.equal(f.scene.position.x, 1);
+        assert.equal(f.saves.length, saves + 1);
+        assert.equal(f.interaction.isMoving, true); assert.equal(f.interaction.movementToken, token);
+        f.interaction.cleanupDragAndZoom(); await flush();
+        delete window.NekoAvatarMultiScreenDragHint;
+    }
+
+    // Idle dragging does not invalidate the interaction token every frame.
+    {
+        const f = fixture(); f.interaction.isDragging = true;
+        const token = f.interaction.movementToken;
+        for (let i = 0; i < 60; i++) f.interaction._updateGuidedMovement(1 / 60);
+        assert.equal(f.interaction.movementToken, token);
+        f.interaction.cleanupDragAndZoom();
+    }
+
     // A queued rebound frame cannot write over a newly selected movement.
     {
         const f = fixture(); const rebound = f.interaction._animateModelToPosition(f.scene.position.clone(), new THREE.Vector3(2, 0, 0));

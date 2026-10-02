@@ -20,7 +20,8 @@ def test_vrm_display_switch_miss_records_bridge_errors_after_model_leaves_window
     assert method_section.index("const recordDisplaySwitchMiss = () => {") < method_section.index("try {")
     assert "let displaySwitchAttempted = false;" in method_section
     assert method_section.index("displaySwitchAttempted = true;") < method_section.index("window.electronScreen.getAllDisplays()")
-    assert "if (displaySwitchAttempted) recordDisplaySwitchMiss();" in method_section
+    assert "if (displaySwitchAttempted && !displaySwitched) recordDisplaySwitchMiss();" in method_section
+    assert "return displaySwitched;" in method_section
 
 
 def test_vrm_legacy_mouse_tracking_respects_disabled_state():

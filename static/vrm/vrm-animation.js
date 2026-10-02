@@ -189,14 +189,7 @@ class VRMAnimation {
             this._cacheSkinnedMeshes(vrm);
         }
 
-        if (vrm.humanoid) {
-            const vrmVersion = this._detectVRMVersion(vrm);
-            if (vrmVersion === '1.0' && vrm.humanoid.autoUpdateHumanBones) {
-                vrm.humanoid.update();
-            } else if (vrmVersion === '0.0' && vrm.humanoid.autoUpdateHumanBones) {
-                vrm.humanoid.update();
-            }
-        }
+        if (vrm.humanoid?.autoUpdateHumanBones) vrm.humanoid.update();
 
         vrm.scene.updateMatrixWorld(true);
         this._skinnedMeshes.forEach(mesh => {
@@ -380,12 +373,6 @@ class VRMAnimation {
         }
 
         return clip;
-    }
-
-    _processTracksForVersion(clip, vrmVersion) {
-        // three-vrm-animation 3.x 的 createVRMAnimationClip() 对 VRM 0.x 和 1.0
-        // 都使用 getNormalizedBoneNode() 生成轨道名。不要再修改 Normalized_ 前缀，
-        // 否则 VRM 0.x 的轨道会失去目标并把模型留在 T-pose。
     }
 
     _stripRootTranslationTracks(clip, vrm) {
@@ -751,7 +738,7 @@ class VRMAnimation {
             if (abortStaleRequest()) return false;
             const clip = await this._createAndValidateAnimationClip(vrmAnimation, vrm);
             if (abortStaleRequest()) return false;
-            this._processTracksForVersion(clip, vrmVersion);
+            // VRM 0/1 都保留 createVRMAnimationClip 的 Normalized_* 骨骼轨道名。
             // 引导移动由 vrm-interaction 控制 scene.position，避免根平移叠加。
             // 普通动画保留 authored 平移，否则坐姿/躺姿等动作会丢失髋部高度。
             if (options.movement === true) {

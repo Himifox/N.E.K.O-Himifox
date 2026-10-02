@@ -597,7 +597,10 @@ class VRMInteraction {
 
     _updateGuidedMovement(delta) {
         if (this.isDragging) {
-            this._cancelGuidedMovement();
+            if (this.isMoving || this._movementAction || this._movementOwnerToken !== null
+                || this._movementFinishingToken !== null || this._smoothFacingFrame !== null) {
+                this._cancelGuidedMovement();
+            }
             return;
         }
         if (!this.isMoving || !this.moveTarget || !this.manager.currentModel?.scene) return;
@@ -1593,6 +1596,16 @@ class VRMInteraction {
             }
         };
         let displaySwitchAttempted = false;
+        let displaySwitched = false;
+        const finishTransferredDisplay = () => {
+            // IPC 已改变窗口，不能再返回“未切屏”。仅约束当前位置，不取消新交互。
+            if (this.manager.currentModel?.scene === scene) {
+                const position = this.clampModelPosition(scene.position.clone());
+                if (position?.isVector3) scene.position.copy(position);
+                void this._savePositionAfterInteraction();
+            }
+            return true;
+        };
 
         try {
             // 1. 计算模型在当前窗口中的屏幕空间中心点（像素）
@@ -1723,12 +1736,16 @@ class VRMInteraction {
             console.log('[VRM] 检测到模型移出当前屏幕，准备切换到屏幕:', targetDisplay.id);
 
             const result = await window.electronScreen.moveWindowToDisplay(switchScreenX, switchScreenY);
-            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
-
             if (!(result && result.success && !result.sameDisplay)) {
+                if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
                 recordDisplaySwitchMiss();
                 return false;
             }
+            displaySwitched = true;
+            if (typeof window.NekoAvatarMultiScreenDragHint?.markDisplaySwitchSuccess === 'function') {
+                window.NekoAvatarMultiScreenDragHint.markDisplaySwitchSuccess('vrm');
+            }
+            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return finishTransferredDisplay();
             console.log('[VRM] 屏幕切换成功:', result);
 
             // 5. 将模型在世界坐标中偏移，使拖拽抓取点落到释放鼠标的位置。
@@ -1741,7 +1758,7 @@ class VRMInteraction {
 
             // 6. 等待一帧让新窗口尺寸生效，再执行回弹与保存
             await new Promise(resolve => requestAnimationFrame(resolve));
-            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
+            if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return finishTransferredDisplay();
             this._moveModelCenterToWindowPoint(desiredModelCenterX, desiredModelCenterY);
             interactionToken.value = this.movementToken;
 
@@ -1751,19 +1768,15 @@ class VRMInteraction {
                 const snapping = this._snapModelIntoScreen({ animate: true });
                 interactionToken.value = this.movementToken;
                 await snapping;
-                if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return false;
+                if (this.manager.currentModel?.scene !== scene || !stillOwnsInteraction()) return finishTransferredDisplay();
                 await this._savePositionAfterInteraction();
-            }
-            if (window.NekoAvatarMultiScreenDragHint &&
-                typeof window.NekoAvatarMultiScreenDragHint.markDisplaySwitchSuccess === 'function') {
-                window.NekoAvatarMultiScreenDragHint.markDisplaySwitchSuccess('vrm');
             }
 
             return true;
         } catch (error) {
             console.error('[VRM] 检测/切换屏幕时出错:', error);
-            if (displaySwitchAttempted) recordDisplaySwitchMiss();
-            return false;
+            if (displaySwitchAttempted && !displaySwitched) recordDisplaySwitchMiss();
+            return displaySwitched;
         }
     }
 
