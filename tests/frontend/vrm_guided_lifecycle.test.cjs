@@ -177,18 +177,22 @@ const vm = require('node:vm');
 
     // A failed clip leaves pure translation active; cleanup must release it.
     {
-        const f = fixture(); f.manager.playVRMAAnimation = async () => false;
+        const f = fixture(); let stops = 0;
+        f.manager.playVRMAAnimation = async () => false;
+        f.manager.stopVRMAAnimation = () => { stops++; };
         f.select(new THREE.Vector3(0, 1, 0)); await flush();
         assert.equal(f.interaction.isMoving, true);
         assert.equal(f.interaction._movementAction, null);
         f.interaction.cleanupDragAndZoom(); await flush();
         assert.equal(f.leases.size, 0);
+        assert.equal(stops, 0, 'failed walk must not stop the existing idle action');
     }
 
     // Cleanup also covers ownership alone, and must survive a stop failure.
     {
         const f = fixture();
         f.interaction._movementOwnerToken = 'held-without-action';
+        f.interaction._movementPlaybackAction = {};
         f.leases.set(f.interaction._movementRestOwner, 'held-without-action');
         const warnings = [];
         context.console = { ...console, warn: (...args) => warnings.push(args) };
@@ -609,6 +613,34 @@ const vm = require('node:vm');
         f.interaction.cleanupDragAndZoom(); await flush();
     }
 
+
+    // Zero speed cancels both active movement and a subsequently selected trip.
+    for (const zeroBeforeSelect of [false, true]) {
+        const f = fixture();
+        if (zeroBeforeSelect) f.interaction.setMovementSpeed(0);
+        f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        if (zeroBeforeSelect) f.interaction._updateGuidedMovement(1 / 60);
+        else f.interaction.setMovementSpeed(0);
+        await flush();
+        assert.equal(f.interaction.isMoving, false); assert.equal(f.leases.size, 0);
+        assert.equal(f.interaction._smoothFacingFrame, null);
+        assert.equal(f.interaction._movementPlaybackAction, null);
+        f.interaction.cleanupDragAndZoom();
+    }
+
+    // F mode survives enter and hover, and clears on blur or release.
+    {
+        const f = fixture(); const canvas = f.manager.renderer.domElement;
+        f.interaction._movementKeyDownHandler({ key: 'f', preventDefault() {} });
+        f.interaction.mouseEnterHandler(); f.interaction.mouseHoverHandler({ clientX: 0, clientY: 0 });
+        assert.equal(canvas.style.cursor, 'crosshair');
+        f.interaction._movementBlurHandler();
+        assert.equal(f.interaction.targetMode, false); assert.equal(canvas.style.cursor, 'default');
+        f.interaction._movementKeyDownHandler({ key: 'f', preventDefault() {} });
+        f.interaction._movementKeyUpHandler({ key: 'f' });
+        assert.equal(canvas.style.cursor, 'default');
+        f.interaction.cleanupDragAndZoom();
+    }
 
     // IME composing F events must remain available to the input method.
     for (const composing of [{ isComposing: true }, { keyCode: 229 }]) {

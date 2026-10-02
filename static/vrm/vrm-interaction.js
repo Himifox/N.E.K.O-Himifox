@@ -469,7 +469,10 @@ class VRMInteraction {
         const value = Number(speed);
         if (!Number.isFinite(value)) return this.movementMaxSpeed;
         this.movementMaxSpeed = Math.max(0, Math.min(0.9, value));
-        if (this.movementMaxSpeed === 0) this.movementVelocity = 0;
+        if (this.movementMaxSpeed === 0) {
+            this.movementVelocity = 0;
+            this._cancelGuidedMovement();
+        }
         return this.movementMaxSpeed;
     }
 
@@ -543,11 +546,9 @@ class VRMInteraction {
         try {
             // 当前两套目标模型对 stop/turn clip 的骨骼兼容性还不稳定；到达时先安全
             // 停止循环走路并恢复 humanoid/rest，避免连续切换多个 clip 触发 T-pose。
-            if (endedOwnerToken && this.manager && typeof this.manager.stopVRMAAnimation === 'function') {
-                if (!motion?.hasOtherExternalPlayback?.(this._movementRestOwner)) this.manager.stopVRMAAnimation();
-                else if (endedPlaybackAction) {
-                    this.manager.stopVRMAAnimation({ expectedAction: endedPlaybackAction, preservePending: true });
-                }
+            if (endedOwnerToken && endedPlaybackAction && this.manager
+                && typeof this.manager.stopVRMAAnimation === 'function') {
+                this.manager.stopVRMAAnimation({ expectedAction: endedPlaybackAction, preservePending: true });
             }
         } catch (error) {
             console.warn('[VRM Interaction] 引导移动结束时停止动作失败:', error);
@@ -627,7 +628,11 @@ class VRMInteraction {
         }
         const dt = Math.max(0, Number(delta) || 0);
         const maxSpeed = Math.max(0, Math.min(0.9, Number(this.movementMaxSpeed) || 0));
-        if (maxSpeed <= 0 || dt <= 0) return;
+        if (maxSpeed <= 0) {
+            this._cancelGuidedMovement();
+            return;
+        }
+        if (dt <= 0) return;
         const brakingDistance = (this.movementVelocity * this.movementVelocity)
             / Math.max(0.001, 2 * this.movementDeceleration);
         if (distance <= brakingDistance + this.movementArrivalThreshold) {
@@ -754,6 +759,7 @@ class VRMInteraction {
         this._movementBlurHandler = () => {
             // 失焦只退出选点模式；已确认的目标仍继续执行。
             this.targetMode = false;
+            if (!this.isDragging && canvas) canvas.style.cursor = 'default';
         };
         window.addEventListener('keydown', this._movementKeyDownHandler);
         window.addEventListener('keyup', this._movementKeyUpHandler);
@@ -960,7 +966,7 @@ class VRMInteraction {
         // 5. 鼠标进入
         this.mouseEnterHandler = () => {
             if (!this.isDragging) {
-                canvas.style.cursor = 'default';
+                canvas.style.cursor = this.targetMode ? 'crosshair' : 'default';
             }
         };
 
@@ -969,6 +975,7 @@ class VRMInteraction {
         let _lastHoverHitTestAt = 0;
         this.mouseHoverHandler = (e) => {
             if (this.isDragging || this.checkLocked()) return;
+            if (this.targetMode) { canvas.style.cursor = 'crosshair'; return; }
             const now = performance.now();
             if ((now - _lastHoverHitTestAt) < 80) return;
             _lastHoverHitTestAt = now;
