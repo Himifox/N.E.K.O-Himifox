@@ -627,6 +627,38 @@ const vm = require('node:vm');
         delete window.__NEKO_MULTI_WINDOW__;
     }
 
+    // A temporarily zero-height canvas cannot poison a valid movement target.
+    {
+        const f = fixture();
+        f.scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial()));
+        f.manager.currentModel.vrm.scene = f.scene;
+        f.manager.camera.updateMatrixWorld();
+        f.manager.renderer.domElement.getBoundingClientRect = () => ({ width: 640, height: 0 });
+        window.innerWidth = 640; window.innerHeight = 0;
+        const aspect = f.manager.camera.aspect;
+        f.manager.renderer.setSize = () => { throw new Error('invalid viewport must not resize renderer'); };
+        window.VRMManager.prototype.onWindowResize.call(f.manager);
+        assert.equal(f.manager.camera.aspect, aspect, 'invalid resize preserves the previous projection');
+        f.interaction.clampModelPosition = window.VRMInteraction.prototype.clampModelPosition;
+        f.select(new THREE.Vector3(100, 0, 0)); await flush();
+        f.interaction._revalidateMovementTarget();
+        assert.ok([f.interaction.moveTarget.x, f.interaction.moveTarget.y, f.interaction.moveTarget.z].every(Number.isFinite));
+        assert.equal(f.scene.position.x, 0);
+        // A faulty boundary result is ignored rather than copied into the target.
+        f.interaction.clampModelPosition = () => new THREE.Vector3(NaN, Infinity, 0);
+        f.interaction._revalidateMovementTarget(); assert.equal(f.interaction.moveTarget.x, 100);
+        f.interaction.cleanupDragAndZoom(); await flush();
+    }
+    // An already-invalid target cancels and releases playback, without saving.
+    {
+        const f = fixture(); f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        const saves = f.saves.length; f.interaction.moveTarget.x = NaN;
+        f.interaction._updateGuidedMovement(1 / 60); await flush();
+        assert.equal(f.interaction.isMoving, false); assert.equal(f.leases.size, 0);
+        assert.equal(f.interaction._smoothFacingFrame, null); assert.equal(f.saves.length, saves);
+        f.interaction.cleanupDragAndZoom();
+    }
+
     // Idle dragging does not invalidate the interaction token every frame.
     {
         const f = fixture(); f.interaction.isDragging = true;

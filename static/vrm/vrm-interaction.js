@@ -609,7 +609,9 @@ class VRMInteraction {
     _revalidateMovementTarget() {
         if (!this.isMoving || !this.moveTarget || this.isDragging) return;
         const target = this.clampModelPosition(this.moveTarget.clone());
-        if (target?.isVector3) this.moveTarget.copy(target);
+        if (target?.isVector3 && [target.x, target.y, target.z].every(Number.isFinite)) {
+            this.moveTarget.copy(target);
+        }
     }
 
     _updateGuidedMovement(delta) {
@@ -626,12 +628,19 @@ class VRMInteraction {
         const scratch = this._getMovementScratch();
         const offset = scratch.offset.copy(target).sub(scene.position);
         let distance = offset.length();
-        if (!Number.isFinite(distance) || distance <= this.movementArrivalThreshold) {
+        if (!Number.isFinite(distance)) {
+            this._cancelGuidedMovement();
+            return;
+        }
+        if (distance <= this.movementArrivalThreshold) {
             // 到达时再按当前视口约束，覆盖选点后切屏/缩窗的尺寸变化。
             this._revalidateMovementTarget();
             distance = offset.copy(target).sub(scene.position).length();
             // 重新约束可能产生另一个落点，继续正常移动而不是瞬移到新目标。
-            if (!Number.isFinite(distance)) return;
+            if (!Number.isFinite(distance)) {
+                this._cancelGuidedMovement();
+                return;
+            }
             if (distance <= this.movementArrivalThreshold) {
                 scene.position.copy(target);
                 this.movementVelocity = 0;
@@ -1398,6 +1407,9 @@ class VRMInteraction {
             const canvasRect = renderer.domElement.getBoundingClientRect();
             const screenWidth = canvasRect.width;
             const screenHeight = canvasRect.height;
+
+            if (!Number.isFinite(screenWidth) || !Number.isFinite(screenHeight)
+                || screenWidth <= 0 || screenHeight <= 0) return position;
 
             // Never demand more visible pixels than the viewport can supply
             const effectiveMinX = Math.min(MIN_VISIBLE_PIXELS, screenWidth);

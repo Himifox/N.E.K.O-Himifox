@@ -1782,6 +1782,8 @@ class VRMManager {
             const visibleHeight = (this.container && this.container.clientHeight > 0)
                 ? this.container.clientHeight : (window.innerHeight || screenHeight);
 
+            if (!Number.isFinite(visibleWidth) || !Number.isFinite(visibleHeight)
+                || visibleWidth <= 0 || visibleHeight <= 0) return;
             this.camera.aspect = visibleWidth / visibleHeight;
             this.camera.updateProjectionMatrix();
             this.renderer.setSize(visibleWidth, visibleHeight, false);
@@ -1799,6 +1801,7 @@ class VRMManager {
             height = window.innerHeight;
         }
 
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(width, height);
