@@ -512,6 +512,8 @@ async function verifyColdExternalPlaybackOwnership() {
     assert.equal(holdSettled, true, 'a cold external hold must not wait for runtime initialization');
     assert.equal(await holdResult, true);
     assert.equal(harness.players.length, 0, 'the hold should resolve while semantics are still loading');
+    assert.equal(harness.context.NekoMotion.hasOtherExternalPlayback('guided-movement'), true);
+    assert.equal(harness.context.NekoMotion.hasOtherExternalPlayback('jukebox'), false);
     assert.deepEqual(harness.calls, [['official-stop']]);
     assert.equal(harness.context.__nekoMotionOwnsVrmPlayback, true);
 
@@ -546,6 +548,7 @@ async function verifyColdExternalPlaybackOwnership() {
     ]);
 
     harness.context.lanlan_config.vrmIdleAnimations = ['/ready-idle.vrma'];
+    assert.equal(harness.context.NekoMotion.hasOtherExternalPlayback('guided-movement'), false);
     assert.equal(
         await harness.context.NekoMotion.holdExternalPlayback('jukebox', { token: 74 }),
         true

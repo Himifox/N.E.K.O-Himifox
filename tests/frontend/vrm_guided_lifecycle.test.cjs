@@ -33,6 +33,7 @@ const vm = require('node:vm');
         const saves = [];
         let rests = 0;
         window.NekoMotion = {
+            hasOtherExternalPlayback(owner) { return [...leases.keys()].some(key => key !== owner); },
             async holdExternalPlayback(owner, { token }) { leases.set(owner, token); },
             async releaseExternalPlayback(owner, { token, resume = true }) {
                 if (leases.get(owner) !== token) return false;
@@ -66,6 +67,59 @@ const vm = require('node:vm');
         f.manager.core.saveUserPreferences = async (...args) => { writes.push(args); return true; };
         f.interaction._savePositionAfterInteraction = window.VRMInteraction.prototype._savePositionAfterInteraction;
         return writes;
+    }
+
+    // Existing external playback survives translation, arrival and cancellation.
+    for (const cancel of [false, true]) {
+        const f = fixture(); let plays = 0; let stops = 0; let boosts = 0;
+        f.leases.set('jukebox', 'song');
+        f.manager.playVRMAAnimation = async () => { plays++; return true; };
+        f.manager.stopVRMAAnimation = () => { stops++; };
+        f.manager._boostInteractiveFPS = () => { boosts++; };
+        f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        assert.equal(boosts, 1);
+        f.interaction._updateGuidedMovement(0.1);
+        assert.ok(f.scene.position.y > 0, 'external playback must not prevent translation');
+        if (cancel) f.interaction._cancelGuidedMovement();
+        else {
+            f.scene.rotation.y = Math.PI / 2;
+            f.interaction.moveTarget.copy(f.scene.position);
+            f.interaction._updateGuidedMovement(1 / 60); finishTurn();
+        }
+        await flush();
+        assert.equal(plays, 0); assert.equal(stops, 0); assert.equal(f.rests(), 0);
+        assert.equal(f.leases.size, 1); assert.equal(f.leases.get('jukebox'), 'song');
+        f.interaction.cleanupDragAndZoom(); await flush();
+    }
+
+    // A dance starting while the walk loads must not be overwritten or stopped.
+    {
+        const f = fixture(); const loading = deferred(); let stops = 0;
+        f.manager.playVRMAAnimation = async (_path, options) => {
+            await loading.promise; return options.shouldApply();
+        };
+        f.manager.stopVRMAAnimation = () => { stops++; };
+        f.select(new THREE.Vector3(0, 1, 0)); await flush();
+        f.leases.set('jukebox', 'new-song'); loading.resolve(); await flush();
+        assert.equal(f.interaction._movementAction, null);
+        f.interaction._cancelGuidedMovement(); await flush();
+        assert.equal(stops, 0); assert.equal(f.rests(), 0);
+        assert.equal(f.leases.size, 1); assert.equal(f.leases.get('jukebox'), 'new-song');
+        f.interaction.cleanupDragAndZoom();
+    }
+
+    // The idle governor sees pure movement and arrival turns without a walk clip.
+    {
+        const manager = Object.create(window.VRMManager.prototype);
+        manager.animation = { vrmaIsPlaying: true, isIdleAnimation: true };
+        manager.interaction = { isMoving: false, _smoothFacingFrame: null };
+        assert.equal(manager._hasRenderActivity(), false);
+        manager.interaction.isMoving = true;
+        assert.equal(manager._hasRenderActivity(), true);
+        manager.interaction.isMoving = false; manager.interaction._smoothFacingFrame = () => {};
+        assert.equal(manager._hasRenderActivity(), true);
+        manager.interaction._smoothFacingFrame = null;
+        assert.equal(manager._hasRenderActivity(), false);
     }
 
     // Replacing a target after walking starts keeps the clip and its lease.

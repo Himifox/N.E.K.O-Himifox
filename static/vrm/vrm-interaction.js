@@ -481,6 +481,7 @@ class VRMInteraction {
             isIdle: false,
             movement: true,
             shouldApply: () => token === this.movementToken && this.isMoving
+                && !window.NekoMotion?.hasOtherExternalPlayback?.(this._movementRestOwner)
         });
         if (token !== this.movementToken || !this.isMoving || played !== true) return;
         this._movementAction = action;
@@ -494,6 +495,8 @@ class VRMInteraction {
         if (typeof motion?.holdExternalPlayback !== 'function'
             || typeof motion?.releaseExternalPlayback !== 'function'
             || typeof motion?.rest !== 'function') return;
+        // 外部动作（例如点歌台舞蹈）继续播放，引导移动仅改变场景位置。
+        if (motion.hasOtherExternalPlayback?.(this._movementRestOwner)) return;
         const ownerToken = String(token);
         try {
             this._movementOwnerToken = ownerToken;
@@ -534,7 +537,8 @@ class VRMInteraction {
         try {
             // 当前两套目标模型对 stop/turn clip 的骨骼兼容性还不稳定；到达时先安全
             // 停止循环走路并恢复 humanoid/rest，避免连续切换多个 clip 触发 T-pose。
-            if (endedOwnerToken && this.manager && typeof this.manager.stopVRMAAnimation === 'function') this.manager.stopVRMAAnimation();
+            if (endedOwnerToken && !motion?.hasOtherExternalPlayback?.(this._movementRestOwner)
+                && this.manager && typeof this.manager.stopVRMAAnimation === 'function') this.manager.stopVRMAAnimation();
         } catch (error) {
             console.warn('[VRM Interaction] 引导移动结束时停止动作失败:', error);
         }
@@ -585,6 +589,7 @@ class VRMInteraction {
         this.isMoving = true;
         this.movementVelocity = 0;
         this._movementFacingProfile = this._getMovementFacingProfile();
+        this.manager._boostInteractiveFPS?.();
         const token = this.movementToken;
         if (!keepWalkPlayback) void this._beginMovementPlayback(token);
         return true;

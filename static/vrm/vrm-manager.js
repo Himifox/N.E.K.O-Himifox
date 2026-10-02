@@ -1124,6 +1124,9 @@ class VRMManager {
         } catch (_) {}
         try { if (this.interaction && this.interaction.isDragging) return true; } catch (_) {}
         try {
+            if (this.interaction?.isMoving || this.interaction?._smoothFacingFrame != null) return true;
+        } catch (_) {}
+        try {
             const cf = this._cursorFollow;
             // 时间戳 0 是合法值（performance.now() 起点），不能用真值判断；但 CursorFollow
             // 构造/重置时把 _lastPointerMoveAt 置 0 当「尚无指针输入」，要靠 _hasPointerInput 区分
