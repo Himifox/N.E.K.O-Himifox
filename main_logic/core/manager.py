@@ -37,9 +37,11 @@ from ._shared import logger, ContextAppendResult, _ReplyTurn
 from .context_append import ContextAppendMixin
 from .focus import FocusMixin
 from .tts_runtime import TtsRuntimeMixin
+from .tts_lifecycle import TtsLifecycleMixin
 from .turn import TurnMixin
 from .tool_calling import ToolCallingMixin
 from .lifecycle import LifecycleMixin
+from .session_lifecycle import SessionOwnershipMixin
 from .proactive import ProactiveMixin
 from .greeting import GreetingMixin
 from .asr_runtime import AsrRuntimeMixin
@@ -52,9 +54,11 @@ class LLMSessionManager(
     ContextAppendMixin,
     FocusMixin,
     TtsRuntimeMixin,
+    TtsLifecycleMixin,
     TurnMixin,
     ToolCallingMixin,
     LifecycleMixin,
+    SessionOwnershipMixin,
     ProactiveMixin,
     GreetingMixin,
     AsrRuntimeMixin,
@@ -72,6 +76,8 @@ class LLMSessionManager(
         self.websocket = None
         self.sync_message_queue = sync_message_queue
         self.session = None
+        self._init_session_lifecycle_state()
+        self._init_tts_lifecycle_state()
         self._init_asr_runtime_state()
         self.last_time = None
         self.is_active = False
@@ -385,6 +391,7 @@ class LLMSessionManager(
         # Serialize pending-input replay with live input dispatch. The cache
         # lock cannot span awaits because attachment handoff reacquires it.
         self._pending_input_flush_active = False
+        self._pending_input_flush_idle_event = None
         
         # 用户活动时间戳：用于主动搭话检测最近是否有用户输入
         self.last_user_activity_time = None  # float timestamp or None
