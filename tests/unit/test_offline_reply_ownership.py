@@ -2514,10 +2514,10 @@ async def test_a_recovery_taken_over_neither_ends_its_turn_again_nor_finalizes_i
     typed input's hold: finalized once, after the hold."""
     facts = await _recovery_cut_by_a_typed_input(monkeypatch, request_id)
     assert facts["interrupted"] is True
-    # Cut before its body was published: with a request id the recovery
-    # stops there (nothing reached cross_server, nothing to end); with none
-    # it cannot tell it lost the output and ends its own turn, once.
-    assert len(facts["turn_ends"]) == (1 if request_id is None else 0)
+    # Cut before its body was published: the recovery knows it was taken
+    # over (``taken_over``), with or without a request id, and stops there;
+    # nothing reached cross_server, so there is nothing to end.
+    assert facts["turn_ends"] == []
     assert facts["finalized_inside_the_hold"] == []
     assert facts["finalize_depths"] == [0]
     assert facts["owed"] is False
@@ -2568,3 +2568,117 @@ async def test_a_recovery_cut_before_its_body_is_published_sends_no_empty_turn_e
     # Taken over in that await, the recovery publishes no body either.
     assert bodies == [] and turn_ends == []
     assert mgr._discarded_turn_open is False
+
+
+_LONG_BODY = "我在说，一直说，不停地说，还在说，继续说，说个没完，还要说，"
+
+
+def _recovery_setup(monkeypatch, request_id):
+    from main_logic.core._shared import _ReplyTurn
+
+    session, mgr, _notes = _wire_text_path(monkeypatch)
+    session.enable_response_guard = True
+    session.max_response_length = 8
+    session.max_response_rerolls = 0
+    mgr.use_tts = False
+    mgr.user_language = "zh-CN"
+    mgr._active_text_request_id = request_id
+    reply_turn = _ReplyTurn(speech_id=mgr.current_speech_id, request_id=request_id)
+    reply_turn.session = session
+    depths = []
+    real_finalize = mgr._finalize_turn_after_emit
+
+    async def finalize():
+        depths.append(getattr(mgr, "_reply_setup_depth", 0))
+        await real_finalize()
+
+    mgr._finalize_turn_after_emit = finalize
+    return session, mgr, reply_turn, depths
+
+
+async def _drive_final_discard(session, mgr, reply_turn, request_id):
+    async def discarded(reason, attempt, max_attempts, will_retry, message=None):
+        await mgr.handle_response_discarded(
+            reason, attempt, max_attempts, will_retry, message,
+            request_id=request_id, reply_turn=reply_turn,
+        )
+
+    async def done():
+        await mgr.handle_response_complete(reply_turn=reply_turn)
+
+    session.script = [[_text(_LONG_BODY), _text("", "stop")]]
+    await session.stream_text(
+        "hi", response_discarded_callback=discarded,
+        response_done_callback=done, reply_owner=reply_turn,
+    )
+
+
+def _held_typed_input(mgr, session, facts, release):
+    interrupted = asyncio.Event()
+
+    async def setup():
+        facts["interrupted"] = await mgr._interrupt_offline_reply(session)
+        facts["ws_mark"] = len(mgr.websocket.sent)
+        interrupted.set()
+        await release.wait()
+
+    return setup, interrupted
+
+
+async def test_a_takeover_in_the_recoverys_own_turn_end_send_still_defers_its_wrap_up(
+    monkeypatch,
+):
+    """The typed input takes the reply over while the recovery sends its own
+    turn end (its turn already ended, so the takeover records no debt): the
+    recovery still owes its wrap-up and settles it after the typed input's
+    hold instead of finalizing inside it."""
+    session, mgr, reply_turn, depths = _recovery_setup(monkeypatch, "req-A")
+    facts, release, holder = {}, asyncio.Event(), {}
+    setup, interrupted = _held_typed_input(mgr, session, facts, release)
+    real_send_turn_end = mgr._send_turn_end_to_frontend
+
+    async def send_turn_end(msg):
+        if "task" not in holder and reply_turn.turn_ended:
+            holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
+            await interrupted.wait()
+        await real_send_turn_end(msg)
+
+    mgr._send_turn_end_to_frontend = send_turn_end
+    await _drive_final_discard(session, mgr, reply_turn, "req-A")
+    inside_the_hold = list(depths)
+    release.set()
+    await holder["task"]
+    await _drain()
+    assert facts["interrupted"] is True
+    assert inside_the_hold == []
+    assert depths == [0]
+    assert mgr._turn_wrap_up_owed is False
+
+
+async def test_a_recovery_without_request_id_taken_over_before_its_loop_sends_nothing(
+    monkeypatch,
+):
+    """No request id, nothing shown before the guard caught it, and the
+    takeover lands in the recovery's TTS cleanup await: the recovery knows it
+    was taken over and publishes no body and no turn end into the new turn."""
+    session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, None)
+    facts, release, holder = {}, asyncio.Event(), {}
+    setup, interrupted = _held_typed_input(mgr, session, facts, release)
+    real_clear = mgr._clear_tts_pipeline
+
+    async def clear():
+        if "task" not in holder:
+            holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
+            await interrupted.wait()
+        await real_clear()
+
+    mgr._clear_tts_pipeline = clear
+    await _drive_final_discard(session, mgr, reply_turn, None)
+    after = [(m.get("type"), m.get("data")) for m in mgr.websocket.sent[facts["ws_mark"]:]]
+    release.set()
+    await holder["task"]
+    await _drain()
+    assert facts["interrupted"] is True
+    assert ("system", "turn end") not in after
+    assert _turn_ends(mgr) == []
+    assert not [m for m in mgr.sync_message_queue.messages if m.get("type") == "json"]

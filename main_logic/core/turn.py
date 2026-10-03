@@ -426,6 +426,8 @@ class TurnMixin:
         its own release yet; nothing is owed and nothing returned.
         """
         owner = _taken_over_reply_turn(kind)
+        if owner is not None:
+            owner.taken_over = True
         if owner is not None and owner.turn_ended:
             if owner.request_id and self._active_text_request_id == owner.request_id:
                 self._active_text_request_id = None
@@ -1133,11 +1135,14 @@ class TurnMixin:
             # Legacy / proactive callbacks have no request owner and keep their
             # historical global-clear behavior. Request-bound callbacks may
             # mutate shared TTS/queue state only while their owner is current.
+            # A reply whose close was taken over owns nothing any more, with
+            # or without a request id to tell it so.
             return (
                 not request_has_owner
                 or self._active_text_request_id == active_request_id
             ) and (
-                reply_turn is None or self._reply_turn_is_current(reply_turn)
+                reply_turn is None
+                or (self._reply_turn_is_current(reply_turn) and not reply_turn.taken_over)
             )
 
         logger.warning(f"[{self.lanlan_name}] 响应异常已丢弃 (reason={reason}, attempt={attempt}/{max_attempts}, will_retry={will_retry})")
@@ -1343,12 +1348,6 @@ class TurnMixin:
                     await recovery_step()
                     if not may_clear_shared_output():
                         break
-                    # An interrupter that took this reply over in the step's
-                    # await has closed it already (``turn_ended``); a reply
-                    # with no request id still passes the check above, and
-                    # must not send on or end its turn a second time.
-                    if reply_turn is not None and reply_turn.turn_ended:
-                        break
             except Exception as e:
                 logger.warning(f"⚠️ {'RESPONSE_LENGTH_TRUNCATED' if _truncated_text is not None else 'RESPONSE_TOO_LONG'} 回复发送失败: {e}")
             finally:
@@ -1379,13 +1378,17 @@ class TurnMixin:
         # 它的 session 已经不在了，没有要它结算的上下文；这时跑 finalize 读的是
         # 新 session，可能在新一轮说到一半时触发续期 / 热切换，结算由新一轮自己做。
         #
-        # 被打断方接管、欠账已经记下时（_turn_wrap_up_owed），改走
+        # 被打断方接管（reply_turn.taken_over，含接管落在恢复自己的 turn end
+        # 之后、接管方没再记欠账的情况）或欠账已经记下时，记为欠账并改走
         # _settle_owed_turn_wrap_up：结算只是延后到打字输入 / 语音轮的持有
         # 释放、会话空闲之后，不会被跳过，也不会抢在打断方的新回复之前。
         if (_is_too_long_final or _truncated_text is not None) and (
             reply_turn is None or self._reply_turn_is_current(reply_turn)
         ):
-            if getattr(self, "_turn_wrap_up_owed", False):
+            if getattr(self, "_turn_wrap_up_owed", False) or (
+                reply_turn is not None and reply_turn.taken_over
+            ):
+                self._turn_wrap_up_owed = True
                 await self._settle_owed_turn_wrap_up()
             else:
                 await self._finalize_turn_after_emit()
