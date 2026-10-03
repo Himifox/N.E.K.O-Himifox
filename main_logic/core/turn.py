@@ -41,7 +41,6 @@ from ._shared import (
     _ReplyTurn,
     _taken_over_reply_turn,
     _MAGIC_COMMAND_IMAGE_DROP_REQUEST_MAX,
-    _TAKEN_OVER_NOTICE_ON_CANCEL_TIMEOUT_S,
     _VOICE_ECHO_LOOKBACK_SECONDS,
     _VOICE_ECHO_LOOKBACK_CHARS,
     _looks_like_recent_ai_echo,
@@ -366,26 +365,16 @@ class TurnMixin:
             # reply's task (an ASR detector worker closed on an error or a
             # restart): the reply is taken over all the same, so close it now,
             # and send its frontend notice before the cancellation goes on, as
-            # below, so it lands before any newer reply. Bounded, since
-            # whoever cancelled this may be waiting for it: a notice not sent
-            # by then is dropped, never sent late. The sends are best effort
-            # and raise nothing; a second cancellation only cuts one short.
+            # below, so it lands before any newer reply. The sends are best
+            # effort and raise nothing; a second cancellation only cuts one
+            # short.
             taken_over = getattr(exc, "interrupted_reply", None)
             if taken_over:
                 frontend_send = self._close_taken_over_offline_reply(
                     taken_over, displaced=False,
                 )
                 if frontend_send is not None:
-                    try:
-                        await asyncio.wait_for(
-                            frontend_send(), _TAKEN_OVER_NOTICE_ON_CANCEL_TIMEOUT_S,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "[%s] notice for a reply taken over by a cancelled "
-                            "interruption not sent in time; dropped",
-                            self.lanlan_name,
-                        )
+                    await frontend_send()
             raise
         if not kind:
             return False
@@ -1349,6 +1338,12 @@ class TurnMixin:
                     await recovery_step()
                     if not may_clear_shared_output():
                         break
+                    # An interrupter that took this reply over in the step's
+                    # await has closed it already (``turn_ended``); a reply
+                    # with no request id still passes the check above, and
+                    # must not send on or end its turn a second time.
+                    if reply_turn is not None and reply_turn.turn_ended:
+                        break
             except Exception as e:
                 logger.warning(f"⚠️ {'RESPONSE_LENGTH_TRUNCATED' if _truncated_text is not None else 'RESPONSE_TOO_LONG'} 回复发送失败: {e}")
             finally:
@@ -1378,10 +1373,17 @@ class TurnMixin:
         # _reply_turn_is_current；client 仍在用时它恒为真，上面的理由不受影响）：
         # 它的 session 已经不在了，没有要它结算的上下文；这时跑 finalize 读的是
         # 新 session，可能在新一轮说到一半时触发续期 / 热切换，结算由新一轮自己做。
+        #
+        # 被打断方接管、欠账已经记下时（_turn_wrap_up_owed），改走
+        # _settle_owed_turn_wrap_up：结算只是延后到打字输入 / 语音轮的持有
+        # 释放、会话空闲之后，不会被跳过，也不会抢在打断方的新回复之前。
         if (_is_too_long_final or _truncated_text is not None) and (
             reply_turn is None or self._reply_turn_is_current(reply_turn)
         ):
-            await self._finalize_turn_after_emit()
+            if getattr(self, "_turn_wrap_up_owed", False):
+                await self._settle_owed_turn_wrap_up()
+            else:
+                await self._finalize_turn_after_emit()
 
     async def handle_audio_data(self, audio_data: bytes):
         """Qwen audio callback: push audio to the WebSocket frontend"""

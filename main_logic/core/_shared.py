@@ -41,10 +41,6 @@ _HANDSHAKE_OVERRIDE_UNSET: Any = object()
 _MAGIC_COMMAND_IMAGE_DROP_REQUEST_MAX = 64
 _VOICE_PROACTIVE_ACK_GRACE_S = 0.05
 _PASSIVE_MEDIA_SESSION_UPDATE_ACK_TIMEOUT_S = 5.0
-# How long a cancelled interrupter still waits to send the frontend notice of
-# the reply it took over (TurnMixin._interrupt_offline_reply): whoever
-# cancelled it may be waiting for it (AsrDetectorDispatcher.close()).
-_TAKEN_OVER_NOTICE_ON_CANCEL_TIMEOUT_S = 1.0
 _TEXT_SESSION_INPUT_TYPES = frozenset({"text", "avatar_drop_image", "user_image"})
 _IMAGE_INPUT_TYPES = frozenset({"screen", "camera", "avatar_drop_image", "user_image"})
 _LIVE_VISION_STREAM_INPUT_TYPES = frozenset({"screen", "camera"})

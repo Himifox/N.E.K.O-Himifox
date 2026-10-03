@@ -1291,6 +1291,7 @@ async def test_a_truncation_recovery_cut_midway_still_ends_its_turn(cut_at):
     the buffer). An input that interrupts the recovery's later steps takes
     its close over, and that close still ends the turn there."""
     mgr = _make_manager()
+    mgr.is_active = True
     mgr.websocket = _FakeConnectedWebSocket()
     mgr._finalize_turn_after_emit = AsyncMock()
     mgr._note_ai_turn = lambda text=None, **_kw: None
@@ -2436,38 +2437,84 @@ async def test_a_cancelled_interrupter_sends_the_notice_before_its_cancellation_
     await asyncio.gather(voice, return_exceptions=True)
 
 
-async def test_a_cancelled_interrupter_drops_a_notice_its_send_cannot_deliver(monkeypatch):
-    """A WebSocket send that never completes (a slow or stuck connection)
-    does not hold the cancellation up for long: whoever cancelled the
-    interrupter (AsrDetectorDispatcher.close()) waits for it. The notice is
-    dropped, never sent late."""
-    import main_logic.core.turn as turn_module
+async def _recovery_cut_by_a_typed_input(monkeypatch, request_id):
+    """A final length discard's recovery (RESPONSE_TOO_LONG) is interrupted
+    by a typed input in its first await; the typed input then holds the
+    owed wrap-up while it sets its reply up."""
     from main_logic.core._shared import _ReplyTurn
 
-    monkeypatch.setattr(turn_module, "_TAKEN_OVER_NOTICE_ON_CANCEL_TIMEOUT_S", 0.05)
     session, mgr, _notes = _wire_text_path(monkeypatch)
-    voice, streaming = _voice_reply(
-        session, _text("说到一半，"), "park", _text("后半句。"), _text("", "stop"),
+    session.enable_response_guard = True
+    session.max_response_length = 8
+    session.max_response_rerolls = 0
+    mgr.use_tts = False
+    mgr.user_language = "zh-CN"
+    mgr._active_text_request_id = request_id
+    reply_turn = _ReplyTurn(speech_id=mgr.current_speech_id, request_id=request_id)
+    reply_turn.session = session
+    facts = {"finalize_depths": []}
+    interrupted, release_setup = asyncio.Event(), asyncio.Event()
+    real_send = mgr.send_lanlan_response
+    real_finalize = mgr._finalize_turn_after_emit
+
+    async def finalize():
+        facts["finalize_depths"].append(getattr(mgr, "_reply_setup_depth", 0))
+        await real_finalize()
+
+    mgr._finalize_turn_after_emit = finalize
+
+    async def typed_input_setup():
+        facts["interrupted"] = await mgr._interrupt_offline_reply(session)
+        interrupted.set()
+        await release_setup.wait()
+
+    interrupter = None
+
+    async def send(text, *args, **kwargs):
+        nonlocal interrupter
+        if interrupter is None:
+            interrupter = asyncio.ensure_future(
+                mgr._with_owed_wrap_up_held(typed_input_setup())
+            )
+            await interrupted.wait()
+        return await real_send(text, *args, **kwargs)
+
+    mgr.send_lanlan_response = send
+
+    async def discarded(reason, attempt, max_attempts, will_retry, message=None):
+        await mgr.handle_response_discarded(
+            reason, attempt, max_attempts, will_retry, message,
+            request_id=request_id, reply_turn=reply_turn,
+        )
+
+    async def done():
+        await mgr.handle_response_complete(reply_turn=reply_turn)
+
+    session.script = [[_text("我在说，一直说，不停地说，还在说，继续说，说个没完，还要说，"), _text("", "stop")]]
+    await session.stream_text(
+        "hi", response_discarded_callback=discarded,
+        response_done_callback=done, reply_owner=reply_turn,
     )
-    await asyncio.wait_for(streaming.wait(), 5)
-    session._active_reply_owner = _ReplyTurn(speech_id="sid-A", request_id="req-A")
-    mgr._active_text_request_id = "req-A"
-    stuck = asyncio.Event()
-    real_send = mgr.websocket.send_json
-
-    async def send_json(payload):
-        if payload.get("data") == "turn abandoned":
-            await stuck.wait()
-        await real_send(payload)
-
-    mgr.websocket.send_json = send_json
-    interrupter = asyncio.ensure_future(mgr._interrupt_offline_reply(session))
-    await asyncio.sleep(0)
-    interrupter.cancel()
-    result = (await asyncio.wait_for(asyncio.gather(interrupter, return_exceptions=True), 2))[0]
-    assert isinstance(result, asyncio.CancelledError)
-    stuck.set()
+    facts["finalized_inside_the_hold"] = list(facts["finalize_depths"])
+    release_setup.set()
+    await asyncio.gather(interrupter)
     await _drain()
-    assert _system(mgr) == []
-    assert _turn_ends(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-A"}]
-    await asyncio.gather(voice, return_exceptions=True)
+    facts["turn_ends"] = _turn_ends(mgr)
+    facts["owed"] = mgr._turn_wrap_up_owed
+    return facts
+
+
+@pytest.mark.parametrize("request_id", [None, "req-A"])
+async def test_a_recovery_taken_over_neither_ends_its_turn_again_nor_finalizes_in_the_hold(
+    monkeypatch, request_id,
+):
+    """The interrupter closed the reply (one turn end) and recorded the
+    wrap-up as owed. The recovery stops sending (even with no request id to
+    tell it so) and pays the debt through the settle, which waits for the
+    typed input's hold: finalized once, after the hold."""
+    facts = await _recovery_cut_by_a_typed_input(monkeypatch, request_id)
+    assert facts["interrupted"] is True
+    assert len(facts["turn_ends"]) == 1
+    assert facts["finalized_inside_the_hold"] == []
+    assert facts["finalize_depths"] == [0]
+    assert facts["owed"] is False

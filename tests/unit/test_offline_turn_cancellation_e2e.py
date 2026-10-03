@@ -1793,3 +1793,25 @@ async def test_a_reply_cut_in_the_flush_split_sends_no_tail_or_summary():
     assert len(calls) == 1 and calls[0][0].endswith(",")
     shape = _history_shape(client)
     assert shape[-1][0] == "ai" and shape[-1][1] == calls[0][0]
+
+
+async def test_a_live_round_whose_turn_left_history_adds_no_orphan_image():
+    """The turn is trimmed out of history in place while its tool runs (a
+    greeting rollback drops what was appended after it): the round keeps
+    nothing, so it is not live either, and no image turn is left orphaned at
+    the end of history. Its text goes with its turn."""
+    image = ToolImage(data_b64=_png_b64(4, 4, (3, 4, 5)), mime="image/png")
+
+    async def handler(call):
+        del client._conversation_history[1:]
+        return ToolResult(call_id=call.call_id, name=call.name, output={}, images=[image])
+
+    client = _client(handler=handler)
+    client.script = [
+        [_text("我看看"), _tool_calls("a1")],
+        [_text("好了"), _text("", "stop")],
+    ]
+    await client.stream_text("A")
+    history = client._conversation_history
+    assert not [m for m in history if isinstance(m, dict)]
+    assert not any(isinstance(m, AIMessage) and "我看看" in m.content for m in history)

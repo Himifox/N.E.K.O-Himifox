@@ -491,9 +491,10 @@ class _ToolingMixin:
         because OpenAI-compat providers reject assistant(tool_calls) -> tool
         -> user(image) -> tool.
 
-        Returns ``(calls executed, finished while live)``. A cancelled round
-        keeps those calls in history unless its assistant turn left the
-        history meanwhile (``_settle_unfinished_tool_round``).
+        Returns ``(calls executed, finished while live)``. A round keeps
+        those calls in history unless its assistant turn left the history
+        meanwhile (``_settle_unfinished_tool_round``); then it is not live
+        either, though its calls still count: its text went with its turn.
 
         ``tool_rounds``, when the caller passes one, gets ``assistant_turn``
         as it is appended: the caller's own rounds, found by identity.
@@ -548,9 +549,12 @@ class _ToolingMixin:
             # its results may have landed after a message another turn added
             # meanwhile, and the request view would otherwise drop the call
             # and its result for good. Already contiguous, it stays as is.
+            kept = len(tool_results)
             if not round_complete or not generation_is_active() or tool_results:
-                self._settle_unfinished_tool_round(messages, assistant_turn, tool_results)
-        live = round_complete and generation_is_active()
+                kept = self._settle_unfinished_tool_round(messages, assistant_turn, tool_results)
+        # A round that left history with its turn (kept nothing) is not live:
+        # its images would be orphaned at the end of history.
+        live = round_complete and generation_is_active() and (kept or not tool_results)
         if live:
             # Right after the round's last reply, not at the end: a user
             # message another turn saved meanwhile must not come between the
