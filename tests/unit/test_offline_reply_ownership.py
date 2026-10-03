@@ -2732,10 +2732,12 @@ async def test_a_recovery_taken_over_in_its_body_send_still_keeps_the_body_in_hi
     assert history[2] == ("HumanMessage", "B")
 
 
-async def test_a_takeover_in_the_discards_tts_cleanup_still_tells_the_frontend(monkeypatch):
-    """The takeover lands in the discard's TTS cleanup await (waiting for
-    the interrupt to land): cross_server has already dropped the text, so
-    the frontend gets its ``response_discarded`` too."""
+async def test_a_takeover_in_the_discards_tts_wait_sends_no_stale_notice(monkeypatch):
+    """The takeover lands while the discard waits for its TTS interrupt to
+    land (a live worker): the taker may already be sending to the frontend,
+    so the discard no longer sends its ``response_discarded``, which would
+    clear the taker's bubble and audio. cross_server's clear went out before
+    the wait."""
     session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, "req-A")
     facts, release, holder = {}, asyncio.Event(), {}
     setup, interrupted = _held_typed_input(mgr, session, facts, release)
@@ -2756,7 +2758,7 @@ async def test_a_takeover_in_the_discards_tts_cleanup_still_tells_the_frontend(m
     ws_types = [m.get("type") for m in mgr.websocket.sent]
     assert facts["interrupted"] is True
     assert "response_discarded_clear" in sync
-    assert "response_discarded" in ws_types
+    assert "response_discarded" not in ws_types
 
 
 async def test_a_discard_taken_over_in_its_frontend_notice_leaves_the_tts_pipeline_alone(
