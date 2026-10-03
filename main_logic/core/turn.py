@@ -500,7 +500,17 @@ class TurnMixin:
             self._reply_setup_depth -= 1
             deferred = skip_settle_if is not None and result is skip_settle_if
             if cancelled:
-                self._fire_task(self._settle_owed_turn_wrap_up())
+                # In a task of its own, and never in place of the
+                # cancellation this finally is carrying.
+                if getattr(self, "_turn_wrap_up_owed", False):
+                    try:
+                        self._fire_task(self._settle_owed_turn_wrap_up())
+                    except Exception as settle_error:
+                        logger.warning(
+                            "[%s] owed turn wrap-up after a cancelled input failed: %s",
+                            self.lanlan_name,
+                            settle_error,
+                        )
             elif not deferred:
                 try:
                     await self._settle_owed_turn_wrap_up()
