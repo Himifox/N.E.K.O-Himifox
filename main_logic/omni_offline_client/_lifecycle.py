@@ -819,9 +819,14 @@ class _LifecycleMixin:
         messages_to_send = self._conversation_history + [_ephemeral_msg]
         # This turn's place in history: the instruction itself is never saved,
         # so a cancelled reply is anchored to the last message it was shown.
-        _history_anchor = (
-            self._conversation_history[-1] if self._conversation_history else None
+        # Not a tool-round dict: a round still running may leave history with
+        # its turn, and stepping over rounds is what _cancelled_turn_end does
+        # anyway. A cancelled reply is dropped once the list was replaced.
+        _history_anchor = next(
+            (m for m in reversed(self._conversation_history) if not isinstance(m, dict)),
+            None,
         )
+        _turn_history = self._conversation_history
         # 送达之后要抄给插件总线的东西：这一轮的指令，以及（若有）真正附上的那批
         # 图。一个槽装两样，是为了让「一轮只发一次」只有一处清标记 —— 两个槽两处
         # 清，就是下一次有人只清了其中一个的地方。None = 已经发过了。
@@ -1142,6 +1147,7 @@ class _LifecycleMixin:
                     # user message; the half that was shown goes before it.
                     self._commit_cancelled_reply(
                         _history_anchor, reply, response_generation,
+                        turn_history=_turn_history,
                     )
                 else:
                     self._conversation_history.append(reply)

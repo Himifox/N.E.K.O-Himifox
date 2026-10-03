@@ -1630,3 +1630,119 @@ async def test_a_live_round_finishing_in_another_turns_setup_window_stays_paired
     last_request = client.requests[-1]
     assert [m for m in last_request if isinstance(m, dict) and m.get("tool_calls")]
     assert [m for m in last_request if isinstance(m, dict) and m.get("role") == "tool"]
+
+
+async def test_a_live_rounds_images_follow_its_last_reply_not_another_turns_message():
+    """The same setup window, with a tool that returns an image: the image
+    turn goes right after the round's reply, before B's user message, so B's
+    request does not end on A's full-size image."""
+    release = asyncio.Event()
+    image = ToolImage(data_b64=_png_b64(4, 4, (7, 8, 9)), mime="image/png")
+
+    async def handler(call):
+        await release.wait()
+        return ToolResult(
+            call_id=call.call_id, name=call.name, output={"ok": True}, images=[image],
+        )
+
+    async def transcript(_t):
+        release.set()
+        await _until(lambda: len(client.requests) >= 2)
+
+    client = _client(handler=handler)
+    client.script = [
+        [_text("我看一下"), _tool_calls("a1")],
+        [_text("看到了"), _text("", "stop")],
+        [_text("B答"), _text("", "stop")],
+    ]
+    turn_a = asyncio.create_task(client.stream_text("A"))
+    await _until(lambda: any(
+        isinstance(m, dict) and m.get("tool_calls") for m in client._conversation_history
+    ))
+    await client.stream_text("B", input_transcript_callback=transcript)
+    await turn_a
+
+    history = client._conversation_history
+    i_call = next(
+        i for i, m in enumerate(history) if isinstance(m, dict) and m.get("tool_calls")
+    )
+    assert history[i_call + 1].get("role") == "tool"
+    assert history[i_call + 2].get("role") == "user"  # the image turn (or its placeholder)
+    i_b = next(
+        i for i, m in enumerate(history)
+        if isinstance(m, HumanMessage) and m.content == "B"
+    )
+    assert i_b > i_call + 2
+    b_request = client.requests[-1]
+    assert not (isinstance(b_request[-1], dict) and b_request[-1].get("role") == "user")
+
+
+async def test_a_cancelled_reply_is_dropped_once_history_was_reset():
+    """A's reply is cut and stalls; B completes as the third repetitive reply
+    and the repetition check resets history. A's late commit finds its turn
+    gone with the old list and writes nothing into the reset history."""
+    stalled, release = asyncio.Event(), asyncio.Event()
+    client = _client()
+    rep = "主人今天也要开开心心的哦"
+    client._recent_responses = [rep, rep]
+    resets = []
+
+    async def on_rep():
+        resets.append(True)
+
+    client.on_repetition_detected = on_rep
+
+    async def cancel_and_stall():
+        await client.handle_interruption()
+        stalled.set()
+        await release.wait()
+
+    client.script = [
+        [_text("我先说一半"), cancel_and_stall, _text("late"), _text("", "stop")],
+        [_text(rep), _text("", "stop")],
+    ]
+    turn_a = asyncio.create_task(client.stream_text("A"))
+    await asyncio.wait_for(stalled.wait(), 1)
+    await client.stream_text("B")
+    assert resets and _history_shape(client) == []
+    release.set()
+    await turn_a
+    assert _history_shape(client) == []
+
+
+async def test_a_proactive_reply_anchored_on_a_dropped_tool_round_stays_before_the_next_user():
+    """A proactive reply begins while another turn's tool round (a dict) is
+    the last message, and that round later leaves history (no call ran). Its
+    cut reply still goes before the user message that interrupted it."""
+    hold = asyncio.Event()
+    p_stalled, p_release = asyncio.Event(), asyncio.Event()
+
+    async def handler(call):
+        await hold.wait()
+        return ToolResult(call_id=call.call_id, name=call.name, output={})
+
+    client = _client(handler=handler)
+    client._conversation_history.append(HumanMessage(content="earlier"))
+
+    async def p_stall():
+        p_stalled.set()
+        await p_release.wait()
+
+    client.script = [
+        [_text("A在查"), _tool_calls("a1")],
+        [_text("刚才看到"), p_stall, _text("late"), _text("", "stop")],
+    ]
+    turn_a = asyncio.create_task(client.stream_text("A"))
+    await _until(lambda: isinstance(client._conversation_history[-1], dict))
+    await client.cancel_response()
+    p = asyncio.create_task(client.prompt_ephemeral("callback"))
+    await asyncio.wait_for(p_stalled.wait(), 1)
+    await client.handle_interruption()
+    turn_a.cancel()
+    await asyncio.gather(turn_a, return_exceptions=True)
+    client._conversation_history.append(HumanMessage(content="Q-new"))
+    p_release.set()
+    await asyncio.gather(p, return_exceptions=True)
+    shape = _history_shape(client)
+    i_reply = next(i for i, s in enumerate(shape) if s[0] == "ai" and s[1] == "刚才看到")
+    assert i_reply < shape.index(("human", "Q-new", None))

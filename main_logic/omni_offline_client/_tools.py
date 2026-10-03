@@ -552,14 +552,22 @@ class _ToolingMixin:
                 self._settle_unfinished_tool_round(messages, assistant_turn, tool_results)
         live = round_complete and generation_is_active()
         if live:
+            # Right after the round's last reply, not at the end: a user
+            # message another turn saved meanwhile must not come between the
+            # round and its images. Never between two replies either, which
+            # OpenAI-compat providers reject.
+            after = tool_results[-1] if tool_results else None
             for result, tool_result_message in image_results:
-                self._append_tool_result_images(
+                added = self._append_tool_result_images(
                     messages,
                     result,
                     slots=tool_image_slots,
                     tool_result_message=tool_result_message,
                     bus_frames=tool_bus_frames,
+                    insert_after=after,
                 )
+                if added is not None:
+                    after = added
         return len(tool_results), live
 
     # ------------------------------------------------------------------
@@ -676,15 +684,19 @@ class _ToolingMixin:
         slots=None,
         bus_frames=None,
         tool_result_message=None,
-    ) -> None:
+        insert_after=None,
+    ):
         """Append one multimodal user turn carrying every image in ``result``.
 
         No-op when the tool returned none, which is the overwhelmingly common
-        case — nothing is allocated and no slot is recorded.
+        case — nothing is allocated and no slot is recorded. With
+        ``insert_after`` (a message in ``messages``, found by identity) the
+        turn goes right after it instead of at the end. Returns the turn, or
+        None when nothing was added.
         """
         images = getattr(result, "images", None)
         if not images:
-            return
+            return None
 
         # Once per turn: every string below has to come out in one language,
         # and the provider is a live callable that could answer differently
@@ -770,10 +782,15 @@ class _ToolingMixin:
                 tool_result_message["content"] = result.output_as_json_string()
 
         if not content:
-            return
+            return None
 
         message = {"role": "user", "content": content}
-        messages.append(message)
+        index = len(messages)
+        if insert_after is not None:
+            after = _find_by_identity(messages, -1, insert_after)
+            if after >= 0:
+                index = after + 1
+        messages.insert(index, message)
 
         # Remember the list too: ``prompt_ephemeral`` runs the tool loop over
         # a scratch list rather than ``_conversation_history``, so an index
@@ -792,13 +809,14 @@ class _ToolingMixin:
                 )
         slots.append((
             messages,
-            len(messages) - 1,
+            index,
             message,
             _loc(TOOL_IMAGE_HISTORY_PLACEHOLDER, lang).format(
                 tool_name=result.name,
                 recall_suffix=recall_suffix,
             ),
         ))
+        return message
 
     def _release_tool_image_slots(self, slots=None) -> None:
         """Swap every injected image turn for its text placeholder.

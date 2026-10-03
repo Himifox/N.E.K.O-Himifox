@@ -316,30 +316,39 @@ class _StreamingMixin:
             await _retire_replaced_clients(self, closers)
         return True
 
-    def _commit_cancelled_reply(self, anchor, reply, generation: int) -> None:
+    def _commit_cancelled_reply(
+        self, anchor, reply, generation: int, *, turn_history=None,
+    ) -> None:
         """Commit the visible part of a cancelled reply to its own turn.
 
         ``anchor`` is the last message this turn owns in history (its user
-        message, or for ``prompt_ephemeral`` the message it saw last; ``None``
-        when history was empty) and ``generation`` the one it streamed under.
-        A turn that began after the cancellation may already have saved its
-        user message or a proactive reply, so the reply goes where this turn
-        ends (``_cancelled_turn_end``) instead of at the end. Tool-round
-        messages are dicts and end no turn: a round starts none, and stepping
-        over it keeps it next to its replies. An anchor that is gone (history
-        rebuilt) falls back to appending, and an empty reply is never
-        written: some providers reject an empty assistant message.
+        message, or for ``prompt_ephemeral`` the last non-tool-round message
+        it saw; ``None`` when there was none) and ``generation`` the one it
+        streamed under. A turn that began after the cancellation may already
+        have saved its user message or a proactive reply, so the reply goes
+        where this turn ends (``_cancelled_turn_end``) instead of at the end.
+        Tool-round messages are dicts and end no turn: a round starts none,
+        and stepping over it keeps it next to its replies. ``turn_history`` is
+        the history list the turn began in: once history was replaced on
+        purpose (the repetition reset, ``close()``) the reply is dropped. An
+        anchor gone from the same list (trimmed in place) falls back to
+        appending, and an empty reply is never written: some providers reject
+        an empty assistant message.
         """
         if not str(getattr(reply, "content", "") or "").strip():
             return
         history = self._conversation_history
+        if turn_history is not None and history is not turn_history:
+            return
         start = -1 if anchor is None else _find_by_identity(history, -1, anchor)
         position = len(history)
         if anchor is None or start >= 0:
             position = _cancelled_turn_end(history, start, generation)
         history.insert(position, reply)
 
-    def _commit_reply(self, anchor, text: str, generation: int) -> bool:
+    def _commit_reply(
+        self, anchor, text: str, generation: int, *, turn_history=None,
+    ) -> bool:
         """Write a reply's final ``text`` to history; False once it is no
         longer live.
 
@@ -352,7 +361,9 @@ class _StreamingMixin:
         repetition check too.
         """
         if self._active_response_generation != generation:
-            self._commit_cancelled_reply(anchor, AIMessage(content=text), generation)
+            self._commit_cancelled_reply(
+                anchor, AIMessage(content=text), generation, turn_history=turn_history,
+            )
             return False
         if text:
             self._conversation_history.append(AIMessage(content=text))
@@ -394,6 +405,7 @@ class _StreamingMixin:
 
     def _keep_shown_text_of_cut_stream(
         self, anchor, shown: str, segment_round, generation: int, rounds,
+        *, turn_history=None,
     ) -> None:
         """Keep what a reply had shown when its task was cancelled before it
         committed.
@@ -412,7 +424,9 @@ class _StreamingMixin:
         if kept is not None and kept is not segment_round:
             kept["content"] = shown
             return
-        self._commit_cancelled_reply(anchor, AIMessage(content=shown), generation)
+        self._commit_cancelled_reply(
+            anchor, AIMessage(content=shown), generation, turn_history=turn_history,
+        )
 
     async def _check_repetition(self, response: str) -> bool:
         """
@@ -1045,6 +1059,9 @@ class _StreamingMixin:
             user_message = HumanMessage(content=_user_text_with_prefix)
 
         self._conversation_history.append(user_message)
+        # The list this turn's user message went into: a cancelled reply is
+        # dropped once history was replaced since (_commit_cancelled_reply).
+        turn_history = self._conversation_history
         # 本次调用自己的「已提交」标记。调用方不能用全局 history 长度判断：并发的
         # 另一条文本请求或收尾中的响应同样会追加，长度增长并不代表**这一轮**进去了。
         if callable(on_turn_committed):
@@ -1630,7 +1647,7 @@ class _StreamingMixin:
                             cut_keeps_shown = False
                             self._commit_cancelled_reply(
                                 user_message, AIMessage(content=assistant_message),
-                                response_generation,
+                                response_generation, turn_history=turn_history,
                             )
                             break
 
@@ -1825,6 +1842,7 @@ class _StreamingMixin:
                                 # end-of-stream flush above, a cancellation point.
                                 if self._commit_reply(
                                     user_message, history_recovery_text, response_generation,
+                                    turn_history=turn_history,
                                 ):
                                     await self._check_repetition(recovery_text)
                                 assistant_message = history_recovery_text
@@ -1971,6 +1989,7 @@ class _StreamingMixin:
                             if (
                                 self._commit_reply(
                                     user_message, summary_prefix_for_history, response_generation,
+                                    turn_history=turn_history,
                                 )
                                 and summary_prefix_for_history
                             ):
@@ -2007,7 +2026,7 @@ class _StreamingMixin:
                                     cut_keeps_shown = False
                                     self._commit_cancelled_reply(
                                         user_message, AIMessage(content=assistant_message),
-                                        response_generation,
+                                        response_generation, turn_history=turn_history,
                                     )
                                     break
                                 if summary_text:
@@ -2048,6 +2067,7 @@ class _StreamingMixin:
                         cut_keeps_shown = False
                         _live_at_commit = self._commit_reply(
                             user_message, assistant_message, response_generation,
+                            turn_history=turn_history,
                         )
                         # 重复检测看完整一轮文本（含 pre-tool），与人类用户感知
                         # 的"这一轮 AI 说了什么"一致。
@@ -2229,6 +2249,7 @@ class _StreamingMixin:
                 self._keep_shown_text_of_cut_stream(
                     user_message, assistant_message, segment_round,
                     response_generation, _turn_tool_rounds,
+                    turn_history=turn_history,
                 )
             task_cancelled = True
             raise
