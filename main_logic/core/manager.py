@@ -371,6 +371,13 @@ class LLMSessionManager(
         self._text_route_owners: dict[str, str] = {}
         self._tool_turn_epoch = 0
         self._tool_turn_evidence: dict | None = None
+        self._turn_wrap_up_owed = False
+        # Typed inputs being handled (StreamingMixin._process_stream_input):
+        # an owed wrap-up waits for their reply rather than running before it.
+        self._reply_setup_depth = 0
+        # The independent-ASR voice turn (its id) holding an owed wrap-up from
+        # its speech onset until it ends (TurnMixin._voice_turn_holds_owed_wrap_up).
+        self._voice_turn_wrap_up_hold: Optional[str] = None
         # 最近一次交给 Offline client 的回复（见 _shared._ReplyTurn）。热切换
         # promote 轮换 speech id 时靠它把仍在途的回复带到新 id 上。
         self._open_reply_turn: Optional[_ReplyTurn] = None
@@ -494,6 +501,9 @@ class LLMSessionManager(
         # 文本判断是否问问号 → 触发 unfinished_thread 机制（5 分钟内允许至多 2
         # 次跟进）；topic sink 独立消费同一 turn，不和 activity tracker 耦合。
         self._current_ai_turn_text: str = ''
+        # A discard emptied that buffer after its text had already reached
+        # cross_server, which stays in that assistant turn until a turn end.
+        self._discarded_turn_open: bool = False
         self._recent_ai_voice_echo_text: str = ''
         self._recent_ai_voice_echo_at: float = 0.0
         self._pending_ai_voice_echo_text: str = ''

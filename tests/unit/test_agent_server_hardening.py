@@ -76,6 +76,19 @@ async def test_knowledge_words_without_structured_owner_do_not_skip_agent(
     plan.assert_awaited_once()
 
 
+def _bind_turn_end_helpers(manager) -> None:
+    """Give a bare namespace the TurnMixin pieces _emit_turn_end calls."""
+    from main_logic.core.turn import TurnMixin
+
+    for name in ("_queue_turn_end", "_send_turn_end_to_frontend"):
+        method = getattr(TurnMixin, name)
+        setattr(
+            manager,
+            name,
+            lambda *args, _method=method, **kwargs: _method(manager, *args, **kwargs),
+        )
+
+
 @pytest.mark.asyncio
 async def test_turn_end_carries_and_consumes_request_scoped_route_owner():
     from main_logic.core.turn import TurnMixin
@@ -88,6 +101,7 @@ async def test_turn_end_carries_and_consumes_request_scoped_route_owner():
         websocket=None,
         _flush_ai_turn_text_to_tracker=MagicMock(),
     )
+    _bind_turn_end_helpers(manager)
 
     await TurnMixin._emit_turn_end(manager, "req-local")
 
@@ -117,6 +131,7 @@ async def test_turn_end_can_promote_proven_tool_evidence_owner():
         websocket=None,
         _flush_ai_turn_text_to_tracker=MagicMock(),
     )
+    _bind_turn_end_helpers(manager)
 
     await TurnMixin._emit_turn_end(manager, "req-tool")
 

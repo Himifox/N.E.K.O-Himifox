@@ -317,19 +317,19 @@ async def test_ephemeral_meme_instruction_follows_user_and_is_not_persisted(
 async def test_concurrent_proactive_turn_does_not_see_a_text_turns_card(monkeypatch):
     """The card is in the shared history only for its own turn's requests.
 
-    In text mode a proactive ``prompt_ephemeral`` can run while ``stream_text``
-    is mid-stream; it must not send the other turn's instruction as if a user
-    had said it.
+    ``prompt_ephemeral`` now declines while another reply is in progress, but
+    a text turn's instruction is registered before that turn's reply begins;
+    a proactive request built in that window must not send the other turn's
+    instruction as if a user had said it. Here the instruction is left in
+    flight by hand, so no reply is in progress and the proactive turn runs.
     """
     from main_logic.omni_offline_client import OmniOfflineClient
-    from utils.llm_client import LLMStreamChunk
+    from utils.llm_client import HumanMessage, LLMStreamChunk
 
     sent = []
 
     async def _astream(self, messages, **_overrides):
         sent.append([str(getattr(message, "content", "")) for message in messages])
-        if len(sent) == 1:
-            await self.prompt_ephemeral("proactive instruction")
         yield LLMStreamChunk(content="reply")
 
     async def _noop(*_args, **_kwargs):
@@ -339,17 +339,19 @@ async def test_concurrent_proactive_turn_does_not_see_a_text_turns_card(monkeypa
     client = _make_client()
     client.on_response_done = _noop
     client.on_status_message = _noop
+    other_turns_card = HumanMessage(content="knowledge card for this turn")
+    client._conversation_history.append(HumanMessage(content="raw user message"))
+    client._conversation_history.append(other_turns_card)
+    client._inflight_turn_instructions().append(other_turns_card)
 
-    await client.stream_text(
-        "raw user message",
-        ephemeral_response_instruction="knowledge card for this turn",
-    )
+    await client.prompt_ephemeral("proactive instruction")
 
-    assert len(sent) >= 2
-    assert "knowledge card for this turn" in sent[0]
-    assert "proactive instruction" in sent[1]
-    assert "knowledge card for this turn" not in sent[1]
-    assert client._inflight_turn_instructions() == []
+    assert sent, "the proactive turn should have sent a request"
+    assert "proactive instruction" in sent[-1]
+    assert "raw user message" in sent[-1]
+    assert "knowledge card for this turn" not in sent[-1]
+    # The text turn still owns its instruction; the proactive turn left it be.
+    assert client._inflight_turn_instructions() == [other_turns_card]
 
 
 @pytest.mark.asyncio
