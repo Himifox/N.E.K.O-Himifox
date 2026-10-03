@@ -544,6 +544,7 @@ def _manager(client):
     deliver a queued agent callback, bound to ``client`` like lifecycle."""
     mgr = _make_transcript_manager()
     mgr.session = client
+    mgr.is_active = True
     mgr._note_ai_turn = lambda text=None, **_kw: None
     _bind_like_lifecycle(mgr, client)
     mgr._turn_wrap_up_owed = False
@@ -671,27 +672,38 @@ async def test_a_mini_game_command_seals_its_own_turn_before_paying_the_owed_wra
     assert getattr(mgr, "_reply_setup_depth", 0) == 0
 
 
-@pytest.mark.parametrize("failure", [ValueError("ws"), asyncio.CancelledError()])
-async def test_a_mini_game_command_that_fails_releases_the_hold(failure):
+@pytest.mark.parametrize(
+    ("failure", "torn_down", "expected"),
+    [
+        (ValueError("ws"), False, ["final_swap", "agent_callbacks"]),
+        (asyncio.CancelledError(), False, ["final_swap", "agent_callbacks"]),
+        (asyncio.CancelledError(), True, []),
+    ],
+)
+async def test_a_mini_game_command_that_fails_releases_the_hold(failure, torn_down, expected):
     """A command that raises still releases its hold on the owed wrap-up and
-    settles it (no reply follows it); a cancelled one (a teardown, which
-    resets the debt) only releases the hold."""
+    settles it (no reply follows it). A cancelled one settles in a task of
+    its own, since its session may live on and go idle no more; a torn-down
+    session pays nothing (its debt is reset)."""
     client = _client()
     mgr = _manager(client)
     mgr.websocket = _FakeConnectedWebSocket()
     mgr._clear_tts_pipeline = AsyncMock()
     mgr._turn_wrap_up_owed = True
-    mgr.send_user_activity = AsyncMock(side_effect=failure)
+
+    async def fail(*_a, **_kw):
+        if torn_down:
+            mgr.is_active = False
+        raise failure
+
+    mgr.send_user_activity = AsyncMock(side_effect=fail)
     with pytest.raises(type(failure)):
         await M._stream_data_now(
             mgr, {"input_type": "text", "data": "/一起看", "request_id": "req-watch"},
         )
     await asyncio.gather(*mgr._bg, return_exceptions=True)
     assert getattr(mgr, "_reply_setup_depth", 0) == 0
-    if isinstance(failure, asyncio.CancelledError):
-        assert mgr.wrap_ups == []
-    else:
-        assert mgr.wrap_ups == ["final_swap", "agent_callbacks"]
+    assert mgr.wrap_ups == expected
 
 
 async def test_a_callback_reply_after_a_command_lands_after_the_interrupted_half():

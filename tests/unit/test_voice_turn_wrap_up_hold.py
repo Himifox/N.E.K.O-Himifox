@@ -231,9 +231,12 @@ async def test_a_rejected_prepare_releases_its_hold():
     assert mgr._voice_turn_wrap_up_hold is None
 
 
-async def test_a_cancelled_dispatch_releases_the_hold_without_settling():
-    """A cancelled final (a teardown resets the debt) only releases the hold,
-    as a cancelled typed input does; the next settle then pays."""
+@pytest.mark.parametrize("torn_down", [False, True])
+async def test_a_cancelled_dispatch_releases_the_hold_and_settles(torn_down):
+    """A cancelled final releases the hold and still settles: the transcript
+    worker is cancelled on ASR errors, detaches and transport aborts too,
+    with the offline session alive and idle, so nothing else would pay. A
+    torn-down session pays nothing (its debt is reset)."""
     client = _client()
     mgr = _manager(client)
     log = _voice_ready(mgr, client)
@@ -246,17 +249,25 @@ async def test_a_cancelled_dispatch_releases_the_hold_without_settling():
         await asyncio.Event().wait()
 
     mgr.handle_input_transcript = AsyncMock(side_effect=stuck)
+    # The shape of TranscriptDispatcher.invalidate_all() cancelling its worker.
     dispatch = asyncio.ensure_future(_final(mgr, token))
     await asyncio.wait_for(entered.wait(), 1)
+    if torn_down:
+        mgr.is_active = False
     dispatch.cancel()
     with pytest.raises(asyncio.CancelledError):
         await dispatch
-    await _settle(mgr)
-    assert (log, mgr._voice_turn_wrap_up_hold) == ([], None)
-    assert mgr._turn_wrap_up_owed is True
-    await mgr._settle_owed_turn_wrap_up()
-    await _settle(mgr)
-    assert mgr.wrap_ups == _WRAP_UP
+    for _ in range(3):
+        await _settle(mgr)
+    assert mgr._voice_turn_wrap_up_hold is None
+    assert mgr.session is client and client.is_idle()
+    assert log == ([] if torn_down else [1]), "finalized once, by the settle"
+    if torn_down:
+        assert mgr.wrap_ups == []
+        assert mgr._turn_wrap_up_owed is True
+    else:
+        assert mgr.wrap_ups == _WRAP_UP
+        assert mgr._turn_wrap_up_owed is False
 
 
 async def test_a_newer_voice_turn_takes_the_hold_over():

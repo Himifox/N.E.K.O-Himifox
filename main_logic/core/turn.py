@@ -456,9 +456,12 @@ class TurnMixin:
         offline session is not idle: a reply live, guard-paused, waiting on
         its completion, or a cancelled one still finishing its task (a tool
         handler, its history commit). The session's idle notification pays
-        it once that drains.
+        it once that drains. Nothing is paid without a live session: a
+        torn-down one has its debt reset (``_init_renew_status``).
         """
         if not getattr(self, "_turn_wrap_up_owed", False):
+            return
+        if self.session is None or not self.is_active:
             return
         if getattr(self, "_reply_setup_depth", 0) > 0:
             return
@@ -477,11 +480,12 @@ class TurnMixin:
         (``_process_stream_input``), a mini-game command sealing its own turn
         (``_maybe_handle_mini_game_magic_command``). The interrupted reply's
         task can end in that window, and its idle notification must not pay
-        the wrap-up then. Settled once ``work`` is done, unless it was
-        cancelled (a torn-down session resets the debt) or it returned
+        the wrap-up then. Settled once ``work`` is done, unless it returned
         ``skip_settle_if`` (the input was deferred and its replay settles); a
-        failing settle never replaces an error ``work`` raised. Returns what
-        ``work`` returned.
+        cancelled ``work`` settles in a task of its own, since the session it
+        interrupted may well live on and go idle no more. A failing settle
+        never replaces an error ``work`` raised. Returns what ``work``
+        returned.
         """
         self._reply_setup_depth = getattr(self, "_reply_setup_depth", 0) + 1
         cancelled = False
@@ -495,7 +499,9 @@ class TurnMixin:
         finally:
             self._reply_setup_depth -= 1
             deferred = skip_settle_if is not None and result is skip_settle_if
-            if not cancelled and not deferred:
+            if cancelled:
+                self._fire_task(self._settle_owed_turn_wrap_up())
+            elif not deferred:
                 try:
                     await self._settle_owed_turn_wrap_up()
                 except Exception as settle_error:

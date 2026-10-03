@@ -1539,3 +1539,50 @@ async def test_a_task_cut_in_the_flush_of_a_rerolled_attempt_keeps_only_that_att
     assert _history_shape(client) == [
         ("human", "Q1", None), ("ai", "重来的回复", None), ("human", "Q2", None),
     ]
+
+
+async def _parked_voice_turn():
+    client = _client()
+    started = asyncio.Event()
+
+    async def park():
+        started.set()
+        await asyncio.Event().wait()
+
+    client.script = [[park]]
+    client.on_status_message = AsyncMock()
+    worker = asyncio.create_task(client.submit_external_voice_turn("hi", turn_id="t"))
+    await asyncio.wait_for(started.wait(), 2)
+    return client, worker
+
+
+def _status_codes(client):
+    return [json.loads(c.args[0]).get("code") for c in client.on_status_message.await_args_list]
+
+
+@pytest.mark.parametrize("cut", ["worker_teardown", "close_order", "interruption"])
+async def test_a_task_cut_before_the_first_token_reports_no_empty_reply(cut):
+    """A reply cut off before its first token was not silent: no
+    LLM_NO_RESPONSE, whether the transcript worker is torn down
+    (TranscriptDispatcher.invalidate_all()), close() cancels the task before
+    retiring the generation, or an interruption takes the reply over."""
+    client, worker = await _parked_voice_turn()
+    if cut == "worker_teardown":
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    elif cut == "close_order":
+        await client._cancel_external_voice_submit_task()
+        client._cancel_response_generation()
+        assert await worker is False
+    else:
+        await client.handle_interruption()
+        assert await worker is False
+    assert _status_codes(client) == []
+
+
+async def test_an_empty_completion_still_reports_no_response():
+    client = _client()
+    client.on_status_message = AsyncMock()
+    client.script = [[_text("", "stop")]] * 3
+    await client.stream_text("hi")
+    assert _status_codes(client) == ["LLM_NO_RESPONSE"]

@@ -2894,22 +2894,18 @@ class AsrRuntimeMixin:
 
         Then settle the owed wrap-up in a task of its own: the turn's reply,
         if it had one, has returned (its completion paid it), and one that
-        ended without a reply leaves nothing else to pay it. Not when the
-        ending task is being cancelled, as ``_with_owed_wrap_up_held`` does
-        (a torn-down session resets the debt). A hold another turn has taken
-        over is left alone.
+        ended without a reply leaves nothing else to pay it. Also when the
+        ending task is being cancelled: the transcript worker is cancelled on
+        ASR errors, detaches and transport aborts too, with the offline
+        session alive and idle (a torn-down one pays nothing, see
+        ``_settle_owed_turn_wrap_up``). A hold another turn has taken over is
+        left alone.
         """
         hold = getattr(self, "_voice_turn_wrap_up_hold", None)
         if hold is None or (turn_id is not None and hold != turn_id):
             return
         self._voice_turn_wrap_up_hold = None
         if not getattr(self, "_turn_wrap_up_owed", False):
-            return
-        try:
-            task = asyncio.current_task()
-        except RuntimeError:
-            return
-        if task is not None and task.cancelling():
             return
         settle = getattr(self, "_settle_owed_turn_wrap_up", None)
         fire_task = getattr(self, "_fire_task", None)

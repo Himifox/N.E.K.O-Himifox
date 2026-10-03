@@ -1084,6 +1084,10 @@ class _StreamingMixin:
         assistant_message_total = ""  # 整轮累计（含 pre-tool），整轮级判定看它
         status_reported = False
         guard_exhausted = False
+        # The task itself was cancelled (close(), a torn-down transcript
+        # worker) with the generation still live: the model was cut off, not
+        # silent, so no LLM_NO_RESPONSE.
+        task_cancelled = False
         # Set while a cancellation of this task would skip a cancelled-reply
         # commit: from the stream loop through the end-of-stream flush and the
         # summary epilogue (the summary call, the tail or summary sent to
@@ -2226,6 +2230,7 @@ class _StreamingMixin:
                     user_message, assistant_message, segment_round,
                     response_generation, _turn_tool_rounds,
                 )
+            task_cancelled = True
             raise
         finally:
             # 先于其它收尾：把 base64 从历史里摘掉，别让它跟着后续每一次请求
@@ -2263,6 +2268,7 @@ class _StreamingMixin:
                 # 用 final-segment 会让"tool 轮跑完了但模型没出 final 文本"的场景被错报。
                 if (
                     not response_cancelled
+                    and not task_cancelled
                     and not assistant_message_total
                     and not guard_exhausted
                     and not status_reported
