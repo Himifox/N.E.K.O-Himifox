@@ -43,6 +43,7 @@ from ._shared import (
     HumanMessage,
     Optional,
     SystemMessage,
+    _REPLY_GENERATION_ATTR,
     _is_api_key_rejected_error,
     _llm_retry_error_types,
     _strip_nonverbal_directives,
@@ -71,6 +72,37 @@ def _with_dialog_slop(method):
     return _wrapper
 
 
+async def _retire_replaced_clients(client, closers) -> None:
+    """Close the clients ``switch_model`` replaced on ``client``, once nothing
+    can still be streaming on them.
+
+    ``closers`` are the async callables that close them. A reply call keeps
+    streaming on the client it read when it sent its request, so a switch
+    made meanwhile by another call (a proactive or user turn's vision switch,
+    a tool image's) must not close that client under it. While any reply call
+    is in flight the closes wait; the last call to return runs them
+    (``_tracked_reply_call``), and ``close()`` runs any still waiting.
+    """
+    waiting = getattr(client, "_retired_client_closers", None)
+    if waiting is None:
+        waiting = client._retired_client_closers = []
+    waiting.extend(closers)
+    if not getattr(client, "_reply_calls_in_flight", 0):
+        await _close_retired_clients(client)
+
+
+async def _close_retired_clients(client) -> None:
+    closers = getattr(client, "_retired_client_closers", None)
+    if not closers:
+        return
+    client._retired_client_closers = []
+    for close in closers:
+        try:
+            await close()
+        except Exception as e:
+            logger.warning("OmniOfflineClient: closing a replaced client failed: %s", e)
+
+
 def _tracked_reply_call(method):
     """Count a ``stream_text`` / ``prompt_ephemeral`` call as reply work in
     flight on this client, from its entry (before its pre-generation awaits)
@@ -81,7 +113,9 @@ def _tracked_reply_call(method):
     (a tool handler, its cancelled-reply history commit), and a claimed one
     is still inside its cleanup; ``is_idle`` reads both as busy through this
     count. When the last call returns, ``on_idle`` is told: an interrupted
-    reply's owed wrap-up has no completion of its own to ride on.
+    reply's owed wrap-up has no completion of its own to ride on. Then the
+    clients ``switch_model`` replaced meanwhile are closed: no call is left
+    that can still be streaming on one (``_retire_replaced_clients``).
     """
     @functools.wraps(method)
     async def _wrapper(self, *args, **kwargs):
@@ -92,6 +126,7 @@ def _tracked_reply_call(method):
             self._reply_calls_in_flight = max(0, self._reply_calls_in_flight - 1)
             if not self._reply_calls_in_flight:
                 self._notify_idle()
+                await _close_retired_clients(self)
     return _wrapper
 
 
@@ -304,10 +339,17 @@ class _LifecycleMixin:
             finished=getattr(self, "_completion_pending_finished", True),
             owner=getattr(self, "_completion_pending_owner", None),
         )
-        self._completion_pending_generation = None
+        self._close_completion_window()
         if getattr(self, "_active_response_generation", None) is None:
             self._is_responding = False
         return claimed
+
+    def _close_completion_window(self) -> None:
+        """End the completion window (claimed, or taken by its own
+        generation) together with the owner it was opened with, so a closed
+        reply's ``_ReplyTurn`` and its meta are not kept reachable."""
+        self._completion_pending_generation = None
+        self._completion_pending_owner = None
 
     def has_reply_in_progress(self) -> bool:
         """A reply is live, guard-paused or waiting on its completion.
@@ -371,9 +413,17 @@ class _LifecycleMixin:
     def _finish_response_generation(self, generation: int) -> bool:
         if getattr(self, "_active_response_generation", None) != generation:
             return False
-        self._active_response_generation = None
-        self._is_responding = False
+        self._retire_active_generation()
         return True
+
+    def _retire_active_generation(self) -> None:
+        """No generation is live any more (it finished, or was cancelled or
+        closed): drop its owner with it, so a closed reply's ``_ReplyTurn``
+        and its meta are not kept reachable. A displacing begin needs no call
+        here: it overwrites the owner."""
+        self._active_response_generation = None
+        self._active_reply_owner = None
+        self._is_responding = False
 
     def _mark_completion_pending(
         self, generation: int, kind: str = "response", *, finished: bool = True,
@@ -410,7 +460,7 @@ class _LifecycleMixin:
         """
         pending = getattr(self, "_completion_pending_generation", None) == generation
         if pending:
-            self._completion_pending_generation = None
+            self._close_completion_window()
             if getattr(self, "_active_response_generation", None) is None:
                 self._is_responding = False
         return pending
@@ -427,8 +477,7 @@ class _LifecycleMixin:
     def _cancel_response_generation(self) -> bool:
         if getattr(self, "_active_response_generation", None) is None:
             return False
-        self._active_response_generation = None
-        self._is_responding = False
+        self._retire_active_generation()
         return True
 
     async def prime_context(self, text: str, skipped: bool = False) -> None:
@@ -545,9 +594,10 @@ class _LifecycleMixin:
 
         # Early decline, before any await: nothing below (the anti-repeat
         # preload, the vision switch, image fitting) is worth doing for a
-        # turn that cannot begin, and the vision switch replaces and closes
-        # the client a live reply is streaming on. The check right before the
-        # begin stays authoritative: these awaits can let another reply begin.
+        # turn that cannot begin, and the vision switch replaces the client a
+        # live reply is streaming on (it checks again for itself, below). The
+        # check right before the begin stays authoritative: these awaits can
+        # let another reply begin.
         if self._declines_over_another_reply(completion_mode):
             return False
 
@@ -622,10 +672,26 @@ class _LifecycleMixin:
             # 不要求 vision_model != model：同一个模型 id 配了不同的视觉 URL / Key
             # 也要切；id 和端点都相同时 switch_model 自己会直接返回。
             if self.vision_model:
+                # The preload above can have let a reply begin: check again
+                # with no await before the switch. The switch also drops
+                # itself if one begins while it builds the new client, so a
+                # turn that will not begin never moves a live reply onto
+                # another client.
+                if self._declines_over_another_reply(completion_mode):
+                    return False
                 logger.info(
                     f"🖼️ prompt_ephemeral: switching to vision model {self.vision_model} (from {self.model}) for proactive media"
                 )
-                await self.switch_model(self.vision_model, use_vision_config=True)
+                if not await self.switch_model(
+                    self.vision_model, use_vision_config=True,
+                    abandon_if=self.has_reply_in_progress,
+                ):
+                    logger.info(
+                        "prompt_ephemeral: another reply began during the vision "
+                        "switch, not starting (completion_mode=%s)",
+                        completion_mode,
+                    )
+                    return False
             # 走和 stream_text 同一条预算阶梯：归一化到模型档位 → 抽样 → 重压 →
             # 最后才丢。这条路以前是仓库里**唯一**一个带图却完全没有预算闸的模型
             # 调用——images 里的每一张都逐条原样贴成 data URL 就发出去了。
@@ -1035,10 +1101,15 @@ class _LifecycleMixin:
                     content=assistant_message,
                     additional_kwargs={"dialog_source": "proactive"},
                 )
+                # Tells a cancelled reply committed later whether this one
+                # began after it (_cancelled_turn_end).
+                setattr(reply, _REPLY_GENERATION_ATTR, response_generation)
                 if response_cancelled:
                     # Whoever cancelled it may already have appended its own
                     # user message; the half that was shown goes before it.
-                    self._commit_cancelled_reply(_history_anchor, reply)
+                    self._commit_cancelled_reply(
+                        _history_anchor, reply, response_generation,
+                    )
                 else:
                     self._conversation_history.append(reply)
             # 防复读 corpus 拆成两半：内存更新在收尾信号**之前**（同步，不含 await，
@@ -1169,7 +1240,14 @@ class _LifecycleMixin:
         return cancelled
 
     async def _cancel_external_voice_submit_task(self) -> bool:
-        """Cancel the narrow external-ASR child task, if another task owns it."""
+        """Cancel the narrow external-ASR child task, if another task owns it.
+
+        A generation the child is streaming runs its ``finally`` as soon as
+        the child is cancelled: its own completion, unless it was taken over
+        first. ``handle_interruption`` takes it over before calling this;
+        ``close()`` takes nothing over, so the completion still runs, as on
+        main.
+        """
 
         submit_task = getattr(self, "_external_voice_submit_task", None)
         if (
@@ -1196,25 +1274,34 @@ class _LifecycleMixin:
         close; it closes the interrupted AI turn only then, so a reply whose
         completion is already running never gets a second turn end. The
         value is truthy exactly when something was interrupted.
-        """
-        if await self._cancel_external_voice_submit_task():
-            logger.info("Cancelling pending external voice submit")
-        claimed = self._claim_pending_completion()
-        if not (
-            self._is_responding
-            or getattr(self, "_active_response_generation", None) is not None
-        ):
-            return claimed
 
-        logger.info("Handling text mode interruption")
-        if await self.cancel_response():
-            # Whatever rode along with a claim, a cancelled live reply was cut
-            # mid-stream: not finished, never sealed as one.
-            return InterruptedReply(
+        Only one reply is ever taken over, as a displacing begin does
+        (``_take_displaced_reply``): a pending completion is claimed only
+        when no generation is live. One still pending beside a live
+        generation belongs to a reply cut by ``close()``, which took nothing
+        over, so it is left to run its own completion rather than claimed
+        and then closed by nobody.
+
+        The reply is taken over before the independent-ASR child task is
+        cancelled, since that task may be the one streaming it. Taken over,
+        its ``stream_text`` skips its completion and keeps the part it
+        already showed (``_keep_shown_text_of_cut_stream``); otherwise its
+        ``finally`` would run the whole completion (turn end, wrap-up) inside
+        this interruption and leave nothing to report here.
+        """
+        if getattr(self, "_active_response_generation", None) is not None:
+            logger.info("Handling text mode interruption")
+            # Read before the cancel: retiring the generation drops its owner.
+            interrupted = InterruptedReply(
                 getattr(self, "_active_completion_kind", "response") or "response",
                 owner=getattr(self, "_active_reply_owner", None),
             )
-        return claimed
+            await self.cancel_response()
+        else:
+            interrupted = self._claim_pending_completion()
+        if await self._cancel_external_voice_submit_task():
+            logger.info("Cancelling pending external voice submit")
+        return interrupted
 
     async def handle_messages(self) -> None:
         """
@@ -1309,6 +1396,9 @@ class _LifecycleMixin:
             except Exception as e:
                 logger.warning(f"OmniOfflineClient.close: genai client close failed: {e}")
             self._genai_client = None
+        # Clients a switch replaced while a reply was streaming: the session
+        # is going, so nothing waits for that reply to return any more.
+        await _close_retired_clients(self)
         self._genai_tools_unsupported = False
         self._openai_tools_unsupported = False
         self._openai_tools_unsupported_with_images = False

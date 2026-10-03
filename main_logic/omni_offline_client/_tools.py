@@ -72,43 +72,49 @@ class _ToolingMixin:
     def _dialog_messages_for_provider(self, messages):
         """Build the request view of ``messages``; the saved history is untouched.
 
-        Screen-comment chains in assistant history are cut back to their first
-        comment, without source labels (``utils.screen_comment_guard``). No
-        user wording restores the removed comments.
+        First, tool-call bookkeeping the provider would reject is dropped, on
+        a copy: a round that is still executing (or was cancelled mid-batch)
+        sits in the shared history while another turn builds its request, and
+        an ``assistant(tool_calls)`` without its tool replies is a 400. This
+        comes first so the screen projection below judges the message order
+        the provider receives: a dropped tool reply no longer separates the
+        assistant messages around it.
+
+        Then screen-comment chains in assistant history are cut back to their
+        first comment, without source labels (``utils.screen_comment_guard``).
+        No user wording restores the removed comments.
 
         Only history up to the current turn's user message is projected. What
         this turn added after it (text already streamed to the user with its
         tool calls, tool results, tool images) is not cut, so the model sees
         every comment it really said and does not repeat one; only the source
         labels are removed from it. A retry re-sends those messages too.
-
-        Then tool-call bookkeeping the provider would reject is dropped, on a
-        copy: a round that is still executing (or was cancelled mid-batch)
-        sits in the shared history while another turn builds its request, and
-        an ``assistant(tool_calls)`` without its tool replies is a 400.
         """
+        paired = self._paired_tool_rounds(messages)
         turn_start = next(
-            (index + 1 for index in range(len(messages) - 1, -1, -1)
-             if getattr(messages[index], "type", None) == "human"),
-            len(messages),
+            (index + 1 for index in range(len(paired) - 1, -1, -1)
+             if getattr(paired[index], "type", None) == "human"),
+            len(paired),
         )
         hits: dict = {}
-        if turn_start < len(messages):
-            head = messages[:turn_start]
+        if turn_start < len(paired):
+            head = paired[:turn_start]
             projected_head = project_screen_history(head, hits=hits)
-            tail = messages[turn_start:]
+            tail = paired[turn_start:]
             projected_tail = strip_screen_labels(tail)
             if projected_tail is not tail:
                 hits["label"] = hits.get("label", 0) + 1
             projected = (
-                messages if projected_head is head and projected_tail is tail
+                paired if projected_head is head and projected_tail is tail
                 else list(projected_head) + list(projected_tail)
             )
         else:
-            projected = project_screen_history(messages, hits=hits)
-        if projected is not messages:
+            projected = project_screen_history(paired, hits=hits)
+        if projected is not paired:
             # The history is re-projected on every provider call; log a
-            # rewrite once, not on every later request that repeats it.
+            # rewrite once, not on every later request that repeats it. The
+            # signature is taken over the saved messages, whose identities
+            # hold across calls (the pairing above builds fresh copies).
             kept = {id(message) for message in projected}
             signature = tuple(id(message) for message in messages if id(message) not in kept)
             log = (
@@ -125,7 +131,7 @@ class _ToolingMixin:
                 hits.get("run", 0),
                 hits.get("label", 0),
             )
-        return self._paired_tool_rounds(projected)
+        return projected
 
     @staticmethod
     def _paired_tool_rounds(messages):
@@ -347,19 +353,21 @@ class _ToolingMixin:
         the whole round goes. Owned messages are matched by identity and put
         back contiguously at the assistant turn's position, so a message
         another turn appended meanwhile is neither lost nor left between a
-        ``tool_calls`` turn and its replies. Returns the calls kept.
+        ``tool_calls`` turn and its replies. An assistant turn that is no
+        longer in ``messages`` was removed with its turn by whoever trimmed
+        the history in place; put back at the end, the round would follow
+        the newer turns, so it goes with its turn. Returns the calls kept.
         """
         owned_ids = {id(assistant_turn)} | {id(message) for message in tool_results}
         position = _find_by_identity(messages, -1, assistant_turn)
-        if position < 0:
-            position = len(messages)
         rebuilt = [message for message in messages if id(message) not in owned_ids]
-        if tool_results:
+        kept = len(tool_results) if position >= 0 else 0
+        if kept:
             # Calls run in order, so the results are a prefix of tool_calls.
-            assistant_turn["tool_calls"] = assistant_turn["tool_calls"][:len(tool_results)]
+            assistant_turn["tool_calls"] = assistant_turn["tool_calls"][:kept]
             rebuilt[position:position] = [assistant_turn, *tool_results]
         messages[:] = rebuilt
-        return len(tool_results)
+        return kept
 
     async def _execute_and_append_openai_tool_calls(
         self,
@@ -480,7 +488,9 @@ class _ToolingMixin:
         because OpenAI-compat providers reject assistant(tool_calls) -> tool
         -> user(image) -> tool.
 
-        Returns ``(calls kept in history, finished while live)``.
+        Returns ``(calls executed, finished while live)``. A cancelled round
+        keeps those calls in history unless its assistant turn left the
+        history meanwhile (``_settle_unfinished_tool_round``).
         """
         messages.append(assistant_turn)
         tool_results: list = []

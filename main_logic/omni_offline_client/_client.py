@@ -256,6 +256,9 @@ class OmniOfflineClient(_ToolingMixin, _GenaiMixin, _StreamingMixin, _MediaMixin
         self._completion_pending_generation: int | None = None
         # stream_text / prompt_ephemeral calls still running (see is_idle).
         self._reply_calls_in_flight = 0
+        # Closes of clients switch_model replaced while a reply call was in
+        # flight; the last call to return runs them (_retire_replaced_clients).
+        self._retired_client_closers: list = []
         # Both sync and optional. on_response_displaced(kind): a user reply
         # began over this one without an interruption and took its close over
         # (the owner closes it). on_idle(): the last reply call returned and

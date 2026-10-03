@@ -96,6 +96,7 @@ class _Runtime(AsrRuntimeMixin):
     # The production helper, so the fake interrupts exactly as core does.
     from main_logic.core.turn import TurnMixin as _TurnMixin
     _interrupt_offline_reply = _TurnMixin._interrupt_offline_reply
+    _close_taken_over_offline_reply = _TurnMixin._close_taken_over_offline_reply
     del _TurnMixin
 
     def __init__(self) -> None:

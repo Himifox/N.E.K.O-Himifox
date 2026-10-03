@@ -18,9 +18,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from main_logic.asr_client.lifecycle import VoiceTurnToken
+from main_logic.core._shared import _ReplyTurn
 from main_logic.voice_turn.contracts import VoiceTranscriptEvent
 from tests.unit.test_core_game_route_memory_contract import _FakeConnectedWebSocket
-from tests.unit.test_offline_reply_ownership import M, _drain, _manager
+from tests.unit.test_offline_reply_ownership import M, _dialog, _drain, _manager
 from tests.unit.test_offline_turn_cancellation_e2e import _client, _text
 
 pytestmark = pytest.mark.unit
@@ -132,7 +133,10 @@ async def test_the_hold_is_taken_before_the_interruption_awaits():
         [_text("说到一半"), parked, _text("late"), _text("", "stop")],
         [_text("语音回复"), _text("", "stop")],
     ]
-    t1 = asyncio.ensure_future(client.stream_text("Q1"))  # e.g. an avatar reply
+    # A typed reply, bound to its request: its close sends ``turn abandoned``.
+    t1 = asyncio.ensure_future(client.stream_text(
+        "Q1", reply_owner=_ReplyTurn(speech_id=None, request_id="req-1"),
+    ))
     await _drain()
 
     class _Socket(_FakeConnectedWebSocket):
@@ -346,3 +350,56 @@ async def test_a_session_reset_clears_the_hold():
     mgr._master_emotion = MagicMock()
     await M._init_renew_status(mgr)
     assert mgr._voice_turn_wrap_up_hold is None
+
+
+async def test_a_voice_onset_cutting_a_voice_reply_owes_its_wrap_up():
+    """Speech onset cuts the previous voice turn's reply, which streams in
+    the independent-ASR child task the interruption cancels. The reply is
+    taken over before that cancel: its completion (turn end, wrap-up) does
+    not run inside the interruption while the user is speaking, the
+    interrupter closes it, the shown half lands in its own turn, and the
+    new turn's reply pays the wrap-up once."""
+    client = _client()
+    mgr = _manager(client)
+    log = _voice_ready(mgr, client)
+    statuses = []
+    client.on_status_message = AsyncMock(side_effect=statuses.append)
+
+    async def on_text_delta(text, _is_first, **_kw):
+        mgr._current_ai_turn_text += text
+
+    client.on_text_delta = on_text_delta
+    streaming, park = asyncio.Event(), asyncio.Event()
+
+    async def parked():
+        streaming.set()
+        await park.wait()
+
+    client.script = [
+        [_text("说到一半，"), parked, _text("后半句。"), _text("", "stop")],
+        [_text("第二句回复。"), _text("", "stop")],
+    ]
+    first, second = _token(mgr, 1), _token(mgr, 2)
+    assert await mgr._prepare_voice_input_turn(first) is True
+    reply = asyncio.ensure_future(_final(mgr, first, text="问题一"))
+    await asyncio.wait_for(streaming.wait(), 2)
+
+    assert await mgr._prepare_voice_input_turn(second) is True
+    assert (log, mgr.wrap_ups) == ([], [])  # held while the user speaks
+    assert mgr._turn_wrap_up_owed is True
+    assert mgr.sync_message_queue.messages[-1:] == [{"type": "system", "data": "turn end"}]
+    await reply
+    assert _dialog(client) == [("human", "问题一"), ("ai", "说到一半，")]
+    assert (log, mgr._voice_turn_wrap_up_hold) == ([], _turn_id(second))
+
+    await _final(mgr, second, text="问题二")
+    assert log == [2]
+    assert mgr.wrap_ups == _WRAP_UP
+    assert [m for m in mgr.sync_message_queue.messages if m.get("data") == "turn end"] == [
+        {"type": "system", "data": "turn end"},
+        {"type": "system", "data": "turn end"},
+    ]
+    assert _dialog(client) == [
+        ("human", "问题一"), ("ai", "说到一半，"), ("human", "问题二"), ("ai", "第二句回复。"),
+    ]
+    assert statuses == []

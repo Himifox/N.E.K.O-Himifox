@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import main_logic.omni_offline_client._genai_support as _ofc_genai
+import main_logic.omni_offline_client._streaming as _ofc_streaming
 from main_logic.tool_calling import ToolDefinition, ToolImage, ToolResult
 from tests.unit.test_offline_provider_frame_publish import _make_client, _png_b64
 from tests.unit.test_tool_calling import (
@@ -491,7 +492,7 @@ def test_an_empty_cancelled_reply_is_never_written(content):
     anchor = HumanMessage(content="Q1")
     client._conversation_history.append(anchor)
     before = list(client._conversation_history)
-    client._commit_cancelled_reply(anchor, AIMessage(content=content))
+    client._commit_cancelled_reply(anchor, AIMessage(content=content), 1)
     assert client._conversation_history == before
 
 
@@ -895,3 +896,183 @@ async def test_the_completion_window_never_clobbers_a_newer_generation():
     await client.prompt_ephemeral("callback")
     assert client._active_response_generation == newer[0]
     assert client._is_responding is True
+
+
+# ── A proactive reply that began later ends a cancelled turn (ninth round) ──
+
+def _deliver_proactive_chat(client, text):
+    """What finish_proactive_delivery saves: a marked reply with no
+    generation of the session behind it."""
+    client._conversation_history.append(AIMessage(
+        content=text,
+        additional_kwargs={"anti_repeat_response_id": "sid", "dialog_source": "proactive"},
+    ))
+    return True
+
+
+@pytest.mark.parametrize("delivery", ["callback", "proactive_chat"])
+async def test_a_late_cancelled_reply_goes_before_a_proactive_reply_that_began_after_it(delivery):
+    """A mini-game command cancels A without adding a user message, and A
+    commits late (here its stream stalls). Only a reply still in progress
+    holds a proactive turn back, so one begins and commits meanwhile. A's
+    shown text goes before it."""
+    stalled, release = asyncio.Event(), asyncio.Event()
+    client = _client()
+
+    async def cancel_and_stall():
+        await client.handle_interruption()
+        stalled.set()
+        await release.wait()
+
+    client.script = [
+        [_text("我先说一半"), cancel_and_stall, _text("late"), _text("", "stop")],
+        [_text("主人，任务完成啦"), _text("", "stop")],
+    ]
+    turn_a = asyncio.create_task(client.stream_text("A"))
+    await asyncio.wait_for(stalled.wait(), 1)
+    assert not client.has_reply_in_progress()
+    if delivery == "callback":
+        assert await client.prompt_ephemeral("callback") is True
+    else:
+        _deliver_proactive_chat(client, "主人，任务完成啦")
+    release.set()
+    await turn_a
+    assert _history_shape(client) == [
+        ("human", "A", None),
+        ("ai", "我先说一半", None),
+        ("ai", "主人，任务完成啦", None),
+    ]
+    assert client._conversation_history[-1].additional_kwargs["dialog_source"] == "proactive"
+
+
+async def test_a_late_cancelled_proactive_reply_goes_before_a_later_one():
+    """The same order between two proactive replies: the first is cancelled
+    and commits late, the second began after it and committed first."""
+    stalled, release = asyncio.Event(), asyncio.Event()
+    client = _client()
+    client._conversation_history.append(HumanMessage(content="earlier"))
+
+    async def cancel_and_stall():
+        await client.handle_interruption()
+        stalled.set()
+        await release.wait()
+
+    client.script = [
+        [_text("刚才看到"), cancel_and_stall, _text("late"), _text("", "stop")],
+        [_text("主人，任务完成啦"), _text("", "stop")],
+    ]
+    first = asyncio.create_task(client.prompt_ephemeral("greeting"))
+    await asyncio.wait_for(stalled.wait(), 1)
+    assert await client.prompt_ephemeral("callback") is True
+    release.set()
+    await first
+    assert _history_shape(client) == [
+        ("human", "earlier", None),
+        ("ai", "刚才看到", None),
+        ("ai", "主人，任务完成啦", None),
+    ]
+
+
+async def test_a_reply_cancelled_in_its_summary_call_goes_before_a_callback_reply(monkeypatch):
+    """The long-reply summary is a small-model call of its own. A mini-game
+    command cancelling A while it runs lets a callback reply begin and
+    commit before A writes the text the UI already showed."""
+    monkeypatch.setattr(_ofc_streaming, "count_tokens", lambda text: len((text or "").split()))
+    monkeypatch.setattr(
+        _ofc_streaming, "truncate_to_tokens",
+        lambda text, budget: " ".join((text or "").split()[:budget]),
+    )
+    client = _client()
+    client.enable_response_guard = True
+    client.enable_long_response_summary = True
+    client.max_response_length = 4
+
+    async def summarize(prefix, tail):
+        await client.handle_interruption()
+        assert await client.prompt_ephemeral("callback") is True
+        return "总之就这样啦"
+
+    client._summarize_tail_for_tts = summarize
+    long_text = (
+        "one two three four. five, six seven eight nine ten. "
+        + " ".join(f"w{i}" for i in range(25)) + "."
+    )
+    client.script = [[_text(long_text), _text("", "stop")],
+                     [_text("主人，任务完成啦"), _text("", "stop")]]
+    await client.stream_text("A")
+    shown = "".join(
+        call.args[0] for call in client.on_text_delta.await_args_list
+        if call.kwargs.get("ui_enabled", True) and call.args[0] != "主人，任务完成啦"
+    )
+    assert shown.startswith("one two three four.")
+    assert _history_shape(client) == [
+        ("human", "A", None),
+        ("ai", shown, None),
+        ("ai", "主人，任务完成啦", None),
+    ]
+
+
+async def test_a_proactive_reply_this_turn_displaced_stays_before_its_cancelled_reply():
+    """A callback reply that began during A's setup (after A's user message
+    was saved) was displaced by A's begin, so it was shown first. It is no
+    boundary for A: A's cancelled reply stays after it and after A's own
+    tool round."""
+    p_stalled, p_release = asyncio.Event(), asyncio.Event()
+    client = _client(handler=_noop_tool)
+    proactive = []
+
+    async def transcript(_text_):
+        proactive.append(asyncio.create_task(client.prompt_ephemeral("callback")))
+        await asyncio.wait_for(p_stalled.wait(), 1)
+
+    async def p_stall():
+        p_stalled.set()
+        await p_release.wait()
+
+    async def finish_proactive():
+        p_release.set()
+        await proactive[0]
+
+    async def cancel():
+        await client.handle_interruption()
+
+    client.on_input_transcript = transcript
+    client.script = [
+        [_text("刚想说"), p_stall, _text("x"), _text("", "stop")],
+        [finish_proactive, _text("我查一下"), _tool_calls("c1")],
+        [_text("查到了"), cancel, _text("late"), _text("", "stop")],
+    ]
+    await client.stream_text("A")
+    assert _history_shape(client) == [
+        ("human", "A", None),
+        ("ai", "刚想说", None),
+        ("assistant", "我查一下", ["c1"]),
+        ("tool", "{}", None),
+        ("ai", "查到了", None),
+    ]
+
+
+async def test_a_cancelled_round_whose_turn_left_history_is_not_put_back():
+    """History is trimmed in place while A's handler runs (a greeting that was
+    interrupted drops what was appended after it, A's turn included), then B
+    replies. A's kept round is not appended after B's turn."""
+    release = asyncio.Event()
+
+    async def slow_tool(call):
+        await release.wait()
+        return ToolResult(call_id=call.call_id, name=call.name, output={})
+
+    client = _client(handler=slow_tool)
+    client.script = [[_text("我查一下"), _tool_calls("a1")],
+                     [_text("好的"), _text("", "stop")]]
+    turn_a = asyncio.create_task(client.stream_text("A"))
+    for _ in range(50):
+        if any(isinstance(m, dict) and m.get("tool_calls") for m in client._conversation_history):
+            break
+        await asyncio.sleep(0)
+    del client._conversation_history[1:]
+    await client.handle_interruption()
+    await client.stream_text("B")
+    release.set()
+    await turn_a
+    assert _history_shape(client) == [("human", "B", None), ("ai", "好的", None)]

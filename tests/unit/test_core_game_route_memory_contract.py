@@ -3359,8 +3359,10 @@ async def test_mini_game_command_pays_only_an_owed_wrap_up_on_an_idle_session(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("busy", [False, True])
 async def test_openclaw_command_pays_an_owed_wrap_up_on_an_idle_session(monkeypatch, busy):
-    """The explicit OpenClaw command starts no reply either, so it pays the
-    interrupted reply's owed wrap-up unless a reply is still finishing."""
+    """The explicit OpenClaw command starts no reply either: the typed input's
+    hold (``_process_stream_input``) pays the interrupted reply's owed wrap-up
+    once the command has sent its own turn end, unless a reply is still
+    finishing."""
     mgr = _make_transcript_manager()
     mgr.session = object.__new__(core_module.OmniOfflineClient)
     mgr.session._pending_images = []
@@ -3376,20 +3378,26 @@ async def test_openclaw_command_pays_an_owed_wrap_up_on_an_idle_session(monkeypa
     mgr._emit_cooldown_turn_end_if_needed = Mock(return_value=False)
     mgr._is_agent_enabled = Mock(return_value=True)
     mgr.agent_flags = {"openclaw_enabled": True, "openclaw_ready": True}
-    mgr._finalize_turn_after_emit = AsyncMock(
-        side_effect=lambda: setattr(mgr, "_turn_wrap_up_owed", False)
-    )
+    sent_at_wrap_up = []
+
+    async def finalize():
+        sent_at_wrap_up.append(mgr.sync_message_queue.messages[-1].get("data"))
+        mgr._turn_wrap_up_owed = False
+
+    mgr._finalize_turn_after_emit = AsyncMock(side_effect=finalize)
     mgr._fire_task = lambda coro: coro.close()
     monkeypatch.setattr(core_module, "dispatch_text_user_message", lambda name, text: None)
 
-    await core_module.LLMSessionManager._process_stream_data_internal(
+    await core_module.LLMSessionManager._process_stream_input(
         mgr,
         {"input_type": "text", "data": "/openclaw stop", "request_id": "req-1"},
     )
 
     mgr.session.stream_text.assert_not_called()
     assert mgr._finalize_turn_after_emit.await_count == int(not busy)
+    assert sent_at_wrap_up == ([] if busy else ["turn end agent_callback"])
     assert mgr._turn_wrap_up_owed is busy
+    assert mgr._reply_setup_depth == 0
 
 
 @pytest.mark.unit
@@ -4729,6 +4737,9 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
     end never flushes the half it already said. The text interruption closes
     it; otherwise it is glued onto the next reply's AI turn. Nothing said,
     nothing recorded: an empty buffer must not become a phantom AI turn."""
+    from main_logic.core._shared import _ReplyTurn
+    from main_logic.omni_offline_client._lifecycle import InterruptedReply
+
     session = _make_offline_session_for_callback_media()
     mgr = _make_callback_media_manager(session)
     notes = []
@@ -4746,7 +4757,11 @@ async def test_typed_text_closes_the_interrupted_reply_as_its_own_ai_turn(
         mgr._finalize_turn_after_emit.assert_not_awaited()
         mgr._current_ai_turn_text += "B-full."
 
-    session.handle_interruption = AsyncMock(return_value=True)
+    # The cut reply hands back the snapshot it was started with.
+    session.handle_interruption = AsyncMock(return_value=InterruptedReply(
+        "response",
+        owner=_ReplyTurn(speech_id=mgr.current_speech_id, request_id="req-old", meta=meta),
+    ))
     session.stream_text = AsyncMock(side_effect=_stream_text)
     monkeypatch.setattr(
         core_module, "dispatch_text_user_message", lambda _n, _t: None

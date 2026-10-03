@@ -21,6 +21,7 @@ import pytest
 
 import main_logic.core as core_module
 import main_logic.omni_offline_client._streaming as offline_streaming
+from main_logic.core._shared import _ReplyTurn
 from main_logic.omni_offline_client._lifecycle import InterruptedReply
 from main_logic.tool_calling import ToolResult
 from tests.unit.test_core_game_route_memory_contract import (
@@ -105,7 +106,10 @@ async def test_an_avatar_reply_begun_in_the_text_setup_window_is_closed_with_its
     text path's interrupt and before stream_text begins; the text reply then
     displaces it with no interrupt. The avatar turn is closed as its own turn
     with its isolation meta and no request id (that id is already the text
-    turn's), and the text reply's own turn end still carries its id."""
+    turn's), and the text reply's own turn end still carries its id. The
+    avatar reply was cut mid-stream, but no user input came after it, so the
+    frontend's current bubble is still its own: it is sealed with its turn
+    end before the text reply's first chunk."""
     session, mgr, notes = _wire_text_path(monkeypatch)
     meta = {"kind": "avatar_interaction", "interaction_id": "i-1"}
     text_began = asyncio.Event()
@@ -155,7 +159,10 @@ async def test_an_avatar_reply_begun_in_the_text_setup_window_is_closed_with_its
         {"type": "system", "data": "turn end", "request_id": "req-text"},
     ]
     assert notes == ["摸头好舒服，", "你好呀。"]
-    assert _system(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-text"}]
+    assert _system(mgr) == [
+        {"type": "system", "data": "turn end", "request_id": None, "meta": meta},
+        {"type": "system", "data": "turn end", "request_id": "req-text"},
+    ]
     assert mgr._turn_wrap_up_owed is False  # the text reply's completion paid it
 
 
@@ -219,13 +226,15 @@ async def test_a_text_reply_displaced_by_a_second_text_is_closed_on_its_own(monk
     await _drain()
     assert not any(interrupts)
     assert notes == ["A说到一半，", "B的回复。"]
-    # A is closed from its own snapshot: its own id, released on the frontend.
+    # A is closed from its own snapshot: its own id. B's input came before A
+    # began, so A's bubble is still the frontend's current one: sealed (and
+    # A's request released) before B's reply starts its own.
     assert _turn_ends(mgr) == [
         {"type": "system", "data": "turn end", "request_id": "req-A"},
         {"type": "system", "data": "turn end", "request_id": "req-B"},
     ]
     assert _system(mgr) == [
-        {"type": "system", "data": "turn abandoned", "request_id": "req-A"},
+        {"type": "system", "data": "turn end", "request_id": "req-A"},
         {"type": "system", "data": "turn end", "request_id": "req-B"},
     ]
 
@@ -323,7 +332,7 @@ async def test_a_displaced_text_reply_that_stored_its_id_last_leaves_no_dead_id(
         {"type": "system", "data": "turn end", "request_id": "req-B"},
     ]
     assert _system(mgr) == [
-        {"type": "system", "data": "turn abandoned", "request_id": "req-A"},
+        {"type": "system", "data": "turn end", "request_id": "req-A"},
         {"type": "system", "data": "turn end", "request_id": "req-B"},
     ]
     assert mgr._active_text_request_id is None
@@ -951,6 +960,8 @@ async def test_a_claimed_agent_callback_reply_gets_its_frontend_turn_end():
 
 
 async def test_a_claimed_response_reply_gets_its_frontend_turn_end():
+    """An unbound reply answers no request: its turn end names none, and the
+    shared id (a typed turn's) is left to that turn."""
     client, mgr = _wire_ws()
     mgr._active_text_request_id = "req-old"
 
@@ -960,20 +971,29 @@ async def test_a_claimed_response_reply_gets_its_frontend_turn_end():
     client._notify_reasoning_done = cleanup
     client.script = [[_text("早上好呀。"), _text("", "stop")]]
     assert await client.prompt_ephemeral("greet", completion_mode="response") is True
-    assert _system(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-old"}]
+    assert _system(mgr) == [{"type": "system", "data": "turn end", "request_id": None}]
+    assert mgr._active_text_request_id == "req-old"
     assert mgr._turn_wrap_up_owed is True
 
 
-async def test_a_reply_cut_mid_stream_still_gets_only_turn_abandoned():
+@pytest.mark.parametrize("bound", [True, False])
+async def test_a_reply_cut_mid_stream_still_gets_only_turn_abandoned(bound):
+    """Never sealed: the interrupter's input split the bubbles. A bound reply
+    releases its own request; an unbound one answers none, and the shared id
+    (a typed turn's) is left alone."""
     client, mgr = _wire_ws()
-    mgr._active_text_request_id = "req-old"
+    mgr._active_text_request_id = "req-B"
 
     async def interrupt():
         await M._interrupt_offline_reply(mgr, client)
 
     client.script = [[_text("说到一半"), interrupt, _text("后半句"), _text("", "stop")]]
-    await client.stream_text("Q")
-    assert _system(mgr) == [{"type": "system", "data": "turn abandoned", "request_id": "req-old"}]
+    owner = _ReplyTurn(speech_id=None, request_id="req-old") if bound else None
+    await client.stream_text("Q", reply_owner=owner)
+    assert _system(mgr) == (
+        [{"type": "system", "data": "turn abandoned", "request_id": "req-old"}] if bound else []
+    )
+    assert mgr._active_text_request_id == "req-B"
 
 
 async def test_a_reply_cut_by_close_and_then_claimed_is_not_sealed():
@@ -1017,7 +1037,9 @@ async def test_the_claimed_turn_end_precedes_user_activity_and_the_new_reply(
         mgr.websocket.sent.append({"type": "gemini_response", "isNewMessage": True})
 
     mgr.send_user_activity = send_user_activity
-    session.handle_interruption = AsyncMock(return_value=InterruptedReply(kind, finished=True))
+    owner = _ReplyTurn(speech_id=None, request_id="req-old") if kind == "response" else None
+    session.handle_interruption = AsyncMock(
+        return_value=InterruptedReply(kind, finished=True, owner=owner))
     session.stream_text = AsyncMock(side_effect=stream_text)
     monkeypatch.setattr(core_module, "dispatch_text_user_message", lambda _n, _t: None)
     await M._process_stream_data_internal(
@@ -1039,8 +1061,10 @@ async def test_only_a_finished_claim_with_text_is_sealed(text, finished):
     mgr._current_ai_turn_text = text
     mgr._active_text_request_id = "req-old"
     mgr.websocket = _FakeConnectedWebSocket()
-    session.handle_interruption = AsyncMock(
-        return_value=InterruptedReply("response", finished=finished))
+    session.handle_interruption = AsyncMock(return_value=InterruptedReply(
+        "response", finished=finished,
+        owner=_ReplyTurn(speech_id=None, request_id="req-old"),
+    ))
     assert await M._interrupt_offline_reply(mgr, session) is True
     assert mgr.websocket.sent == [
         {"type": "system", "data": "turn abandoned", "request_id": "req-old"},
@@ -1166,14 +1190,16 @@ async def test_a_finished_avatar_reply_displaced_by_typed_text_is_sealed_before_
 @pytest.mark.parametrize("kind, finished, text, expected", [
     ("response", True, "说完了。", [{"type": "system", "data": "turn end", "request_id": None}]),
     ("agent_callback", True, "回调说完。", [{"type": "system", "data": "turn end agent_callback"}]),
-    ("response", False, "说到一半", []),
-    ("agent_callback", False, "回调说到一半", []),
+    ("response", False, "说到一半", [{"type": "system", "data": "turn end", "request_id": None}]),
+    ("agent_callback", False, "回调说到一半", [{"type": "system", "data": "turn end agent_callback"}]),
     ("response", True, "", []),
+    ("response", False, "", []),
 ])
-async def test_only_a_finished_displaced_reply_with_text_is_sealed(kind, finished, text, expected):
-    """A displaced reply cut mid-stream is never sealed (the displacing reply
-    takes the frontend's current bubble over), and one that said nothing has
-    no bubble to seal. The new turn's request id is left alone either way."""
+async def test_only_a_displaced_reply_with_text_is_sealed(kind, finished, text, expected):
+    """A displaced reply, finished or cut mid-stream, still owns the
+    frontend's current bubble (the displacing reply has emitted nothing, and
+    its input came first), so it is sealed; one that said nothing has no
+    bubble to seal. The new turn's request id is left alone either way."""
     from main_logic.omni_offline_client._lifecycle import InterruptedReply
 
     mgr = _make_manager()
@@ -1262,10 +1288,12 @@ async def test_a_truncation_recovery_cut_midway_still_ends_its_turn(cut_at):
     mgr._request_tts_done_for_turn = AsyncMock(return_value="queued")
     mgr._push_focus_thinking = AsyncMock()
     session = MagicMock(_conversation_history=[])
-    session.handle_interruption = AsyncMock(return_value=InterruptedReply("response"))
     mgr.session = session
     reply_turn = mgr._begin_reply_turn(speech_id=mgr.current_speech_id, request_id="req-A")
     reply_turn.session = session
+    # The cut reply hands back the snapshot it was started with.
+    session.handle_interruption = AsyncMock(
+        return_value=InterruptedReply("response", owner=reply_turn))
     mgr._active_text_request_id = "req-A"
     real_send = M.send_lanlan_response.__get__(mgr)
 
@@ -1292,6 +1320,316 @@ async def test_a_truncation_recovery_cut_midway_still_ends_its_turn(cut_at):
     body = [i for i, m in enumerate(sync) if m.get("type") == "json"]
     assert body
     assert [m.get("request_id") for m in sync[body[-1]:] if m.get("data") == "turn end"] == ["req-A"]
+
+
+# ── An independent-ASR voice reply is taken over before its task is cancelled ──
+
+
+def _dialog(client):
+    return [
+        (message["role"], message.get("content"))
+        if isinstance(message, dict) else (message.type, message.content)
+        for message in client._conversation_history[1:]
+    ]
+
+
+def _voice_reply(client, *steps):
+    """Start an independent-ASR voice reply (its child task streams it) and
+    return it with an event set once it reaches the first parked step."""
+    streaming, release = asyncio.Event(), asyncio.Event()
+
+    async def parked():
+        streaming.set()
+        await release.wait()
+
+    client.script = [[parked if step == "park" else step for step in steps]]
+    voice = asyncio.ensure_future(client.submit_external_voice_turn("语音", turn_id="t1"))
+    return voice, streaming
+
+
+async def test_a_typed_input_cutting_a_voice_reply_takes_its_close_over(monkeypatch):
+    """The voice reply streams in the child task the typed input's
+    interruption cancels. It is taken over first, so its completion does not
+    run inside that interruption: the interrupter closes it, the half it
+    showed lands before the typed message, and the typed reply's completion
+    pays the wrap-up once, after its own provider request."""
+    session, mgr, notes = _wire_text_path(monkeypatch)
+    finalized = []
+
+    async def finalize():
+        finalized.append(len(session.requests))
+        mgr._turn_wrap_up_owed = False
+
+    mgr._finalize_turn_after_emit = finalize
+    voice, streaming = _voice_reply(
+        session, _text("语音说到一半，"), "park", _text("后半句。"), _text("", "stop"),
+    )
+    session.script.append([_text("B的回复。"), _text("", "stop")])
+    await asyncio.wait_for(streaming.wait(), 5)
+    await M._process_stream_data_internal(
+        mgr, {"input_type": "text", "data": "B", "request_id": "req-B"},
+    )
+    assert await voice is False
+    await _drain()
+
+    assert finalized == [2]
+    assert notes == ["语音说到一半，", "B的回复。"]
+    assert _turn_ends(mgr) == [
+        {"type": "system", "data": "turn end"},
+        {"type": "system", "data": "turn end", "request_id": "req-B"},
+    ]
+    assert _system(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-B"}]
+    dialog = _dialog(session)
+    assert dialog[:2] == [("human", "语音"), ("ai", "语音说到一半，")]
+    assert dialog[-1] == ("ai", "B的回复。")
+    assert [kind for kind, _ in dialog] == ["human", "ai", "human", "ai"]
+
+
+async def test_a_voice_reply_cut_before_its_first_chunk_reports_no_failure():
+    """Cut while waiting for its first chunk: an interruption, not an empty
+    reply. No LLM_NO_RESPONSE, no completion, handed to the interrupter."""
+    client = _client()
+    statuses = []
+    client.on_status_message = AsyncMock(side_effect=statuses.append)
+    voice, streaming = _voice_reply(client, "park", _text("晚到的"), _text("", "stop"))
+    await asyncio.wait_for(streaming.wait(), 5)
+    kind = await client.handle_interruption()
+    assert await voice is False
+    assert kind == "response" and kind.finished is False
+    assert statuses == []
+    client.on_response_done.assert_not_awaited()
+    assert _dialog(client) == [("human", "语音")]
+    assert client.is_idle()
+
+
+async def test_a_voice_reply_whose_turn_is_cancelled_keeps_what_it_showed():
+    """Its voice turn is torn down mid-reply (the submit is cancelled, and
+    its child task with it): nothing took the reply over, so its own
+    completion still closes it, and the text it showed stays in history."""
+    client = _client()
+    voice, streaming = _voice_reply(client, _text("说到一半，"), "park", _text("x"), _text("", "stop"))
+    await asyncio.wait_for(streaming.wait(), 5)
+    voice.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await voice
+    assert _dialog(client) == [("human", "语音"), ("ai", "说到一半，")]
+    client.on_response_done.assert_awaited_once()
+
+
+@pytest.mark.parametrize("cut_in, expected", [
+    # No call finished: the round is dropped, the shown text is the reply.
+    ("first_call", [("human", "语音"), ("ai", "我查一下，")]),
+    # One finished: the kept round already holds the shown text (its
+    # sentinel never comes), so it is not committed a second time.
+    ("second_call", [("human", "语音"), ("assistant", "我查一下，"), ("tool", '{"ok": true}')]),
+    # Same, but the text was still held back (name-prefix buffer): the kept
+    # round holds only what was shown, as its sentinel would have trimmed it.
+    ("second_call_unshown", [("human", "语音"), ("assistant", ""), ("tool", '{"ok": true}')]),
+    # Cut in the text after a finished round: that round is not this text's.
+    ("after_the_round", [
+        ("human", "语音"), ("assistant", "我查一下，"), ("tool", '{"ok": true}'),
+        ("ai", "查到了，"),
+    ]),
+])
+async def test_a_voice_reply_cut_around_its_tool_round_keeps_its_shown_text_once(
+    cut_in, expected,
+):
+    client = _client()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def parked():
+        entered.set()
+        await release.wait()
+
+    async def handler(call):
+        cut_at = {"first_call": "c1", "second_call": "c2", "second_call_unshown": "c2"}
+        if call.call_id == cut_at.get(cut_in):
+            await parked()
+        return ToolResult(call_id=call.call_id, name=call.name, output={"ok": True})
+
+    client.on_tool_call = handler
+    if cut_in == "second_call_unshown":
+        client._prefix_buffer_size = 50
+    calls = ("c1",) if cut_in == "after_the_round" else ("c1", "c2")
+    voice, _streaming = _voice_reply(client, _text("我查一下，"), _tool_calls(*calls))
+    client.script.append([_text("查到了，"), parked, _text("late"), _text("", "stop")])
+    await asyncio.wait_for(entered.wait(), 5)
+    kind = await client.handle_interruption()
+    assert await voice is False
+    assert kind == "response"
+    client.on_response_done.assert_not_awaited()
+    assert _dialog(client) == expected
+
+
+@pytest.mark.parametrize("discard", ["guard_reroll", "stream_retried", "stream_failed"])
+async def test_a_voice_reply_cut_in_a_discard_keeps_no_discarded_text(discard):
+    """The cut lands while the shown text is being discarded (a guard
+    reroll, a stream retried or given up after a failure): none of it is
+    kept."""
+    client = _client()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def discarded(*_args):
+        entered.set()
+        await release.wait()
+
+    async def fail():
+        raise _connection_error() if discard == "stream_retried" else ValueError("boom")
+
+    client.on_response_discarded = discarded
+    if discard == "guard_reroll":
+        client.enable_response_guard = True
+        client.max_response_length = 20
+        client.max_response_rerolls = 1
+        client.script = [[_text("哈哈哈哈哈哈"), _text("哈" * 300), _text("", "stop")]]
+    else:
+        client.script = [[_text("说到一半"), fail]]
+    voice = asyncio.ensure_future(client.submit_external_voice_turn("语音", turn_id="t1"))
+    await asyncio.wait_for(entered.wait(), 5)
+    assert await client.handle_interruption() == "response"
+    assert await voice is False
+    assert _dialog(client) == [("human", "语音")]
+    client.on_response_done.assert_not_awaited()
+
+
+async def test_a_voice_reply_cut_in_its_summary_call_keeps_what_was_shown(monkeypatch):
+    """Cut while the long-reply summary is being written: the reply keeps
+    the text the UI already showed, as the check after that call would."""
+    from main_logic.omni_offline_client import OmniOfflineClient
+    from tests.unit.test_tool_calling import _build_summary_client
+    from utils.llm_client import LLMStreamChunk
+
+    entered = asyncio.Event()
+
+    async def parked_summary(self, prefix, tail):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(OmniOfflineClient, "_summarize_tail_for_tts", parked_summary)
+    long_text = (
+        "one two three four. five, six seven eight nine ten. "
+        + " ".join(f"w{i}" for i in range(25)) + "."
+    )
+
+    async def _astream(self, messages, **overrides):
+        yield LLMStreamChunk(content=long_text)
+
+    monkeypatch.setattr(OmniOfflineClient, "_astream_with_tools", _astream)
+    shown = []
+
+    async def on_text_delta(text, _is_first, **kwargs):
+        if kwargs.get("ui_enabled", True):
+            shown.append(text)
+
+    client = _build_summary_client(monkeypatch, max_response_length=4)
+    client.on_text_delta = on_text_delta
+    client.on_input_transcript = AsyncMock()
+    client.on_response_done = AsyncMock()
+    client.on_response_discarded = None
+    client.on_status_message = AsyncMock()
+    client.on_repetition_detected = None
+    voice = asyncio.ensure_future(client.submit_external_voice_turn("trigger long", turn_id="t1"))
+    await asyncio.wait_for(entered.wait(), 5)
+    assert await client.handle_interruption() == "response"
+    assert await voice is False
+    assert client._conversation_history[-1].content == "".join(shown)
+    client.on_response_done.assert_not_awaited()
+
+
+async def test_a_voice_reply_cut_in_a_typed_setup_window_leaves_that_request_alone(
+    monkeypatch,
+):
+    """Typed input B has stored its request id and is still setting up its
+    reply when a voice reply that began meanwhile is cut (a speech onset or a
+    mini-game command interrupts). Taken over by the interrupter, the voice
+    reply is closed by the shared rule: it is unbound and answers no request,
+    so B's id is neither put on its turn end nor released on the frontend;
+    B's own turn end carries it."""
+    session, mgr, notes = _wire_text_path(monkeypatch)
+    facts = {}
+
+    async def focus_hook(_text_):
+        # B's id is stored; its stream_text has not begun.
+        voice, streaming = _voice_reply(
+            session, _text("语音说到一半，"), "park", _text("后半句。"), _text("", "stop"),
+        )
+        session.script.append([_text("B的回复。"), _text("", "stop")])
+        await asyncio.wait_for(streaming.wait(), 5)
+        facts["interrupted"] = await M._interrupt_offline_reply(mgr, session)
+        facts["voice_delivered"] = await voice
+        facts["id_after_cut"] = mgr._active_text_request_id
+        return False
+
+    mgr._focus_inline_decision = focus_hook
+    await M._process_stream_data_internal(
+        mgr, {"input_type": "text", "data": "B", "request_id": "req-B"},
+    )
+    await _drain()
+
+    assert facts == {"interrupted": True, "voice_delivered": False, "id_after_cut": "req-B"}
+    assert notes == ["语音说到一半，", "B的回复。"]
+    assert _turn_ends(mgr) == [
+        {"type": "system", "data": "turn end"},
+        {"type": "system", "data": "turn end", "request_id": "req-B"},
+    ]
+    assert _system(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-B"}]
+    assert mgr._active_text_request_id is None
+
+
+@pytest.mark.parametrize("cut_in", ["stream", "second_call", "after_the_round"])
+async def test_a_cut_stream_keeps_its_text_after_a_reply_it_displaced(cut_in):
+    """What a reply whose task is cancelled mid-stream keeps goes where its
+    turn ends (``_cancelled_turn_end``), judged by its own generation. A
+    callback reply that began in this turn's setup (after its user message
+    was saved) and was displaced by its begin was shown first, so it is no
+    boundary: the kept half stays after it, and a tool round kept after it is
+    trimmed rather than committed a second time."""
+    p_stalled, p_release = asyncio.Event(), asyncio.Event()
+    cut_point, never = asyncio.Event(), asyncio.Event()
+
+    async def parked(*_args):
+        cut_point.set()
+        await never.wait()
+
+    async def handler(call):
+        if cut_in == "second_call" and call.call_id == "c2":
+            await parked()
+        return ToolResult(call_id=call.call_id, name=call.name, output={"ok": True})
+
+    client = _client(handler=handler)
+    proactive = []
+
+    async def transcript(_text_):
+        proactive.append(asyncio.create_task(client.prompt_ephemeral("callback")))
+        await asyncio.wait_for(p_stalled.wait(), 5)
+
+    async def p_stall():
+        p_stalled.set()
+        await p_release.wait()
+
+    async def finish_proactive():
+        p_release.set()
+        await proactive[0]
+
+    client.on_input_transcript = transcript
+    client.script = [[_text("刚想说"), p_stall, _text("x"), _text("", "stop")]]
+    if cut_in == "stream":
+        client.script.append(
+            [finish_proactive, _text("A说到一半，"), parked, _text("late"), _text("", "stop")])
+        kept = [("ai", "A说到一半，")]
+    elif cut_in == "second_call":
+        client.script.append([finish_proactive, _text("我查一下，"), _tool_calls("c1", "c2")])
+        kept = [("assistant", "我查一下，"), ("tool", '{"ok": true}')]
+    else:
+        client.script.append([finish_proactive, _text("我查一下，"), _tool_calls("c1")])
+        client.script.append([_text("查到了，"), parked, _text("late"), _text("", "stop")])
+        kept = [("assistant", "我查一下，"), ("tool", '{"ok": true}'), ("ai", "查到了，")]
+    turn = asyncio.ensure_future(client.stream_text("A"))
+    await asyncio.wait_for(cut_point.wait(), 5)
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+    assert _dialog(client) == [("human", "A"), ("ai", "刚想说"), *kept]
 
 
 # ── Invariants: exactly one close per generation; busy flag left clean ───────
@@ -1358,6 +1696,40 @@ async def _scenario(client, name):
             client._cancel_response_generation()
         client.script = [[_text("说到"), close_cut, _text("一半"), _text("", "stop")]]
         await client.stream_text("Q")
+    elif name == "external_voice_cut":
+        streaming, park = asyncio.Event(), asyncio.Event()
+
+        async def parked():
+            streaming.set()
+            await park.wait()
+        client.script = [[_text("语音说到"), parked, _text("一半"), _text("", "stop")]]
+        voice = asyncio.ensure_future(client.submit_external_voice_turn("语音", turn_id="t1"))
+        await streaming.wait()
+        await client.handle_interruption()
+        assert await voice is False
+    elif name == "pending_beside_a_live_reply":
+        # A reply cut by close() (which takes nothing over) reaches its
+        # completion window after a newer reply began on the client; an
+        # interruption then cancels the newer one.
+        newer, newer_live, release = [], asyncio.Event(), asyncio.Event()
+
+        async def close_cut():
+            client._cancel_response_generation()
+            newer.append(asyncio.ensure_future(client.stream_text("新")))
+            await newer_live.wait()
+
+        async def newer_begins():
+            newer_live.set()
+            await release.wait()
+
+        async def cleanup(_seq):
+            await client.handle_interruption()
+            release.set()
+        client._notify_reasoning_done = cleanup
+        client.script = [[_text("说到"), close_cut, _text("一半"), _text("", "stop")],
+                         [newer_begins, _text("x"), _text("", "stop")]]
+        await client.prompt_ephemeral("callback", completion_mode="response")
+        await newer[0]
     elif name == "declined_over_a_live_reply":
         declined = []
 
@@ -1376,6 +1748,7 @@ async def _scenario(client, name):
     "completes", "interrupted_mid_reply", "interrupted_while_guard_paused",
     "interrupted_in_a_tool", "claimed_in_its_cleanup", "displaced_live",
     "displaced_in_its_cleanup", "cut_by_close", "declined_over_a_live_reply",
+    "external_voice_cut", "pending_beside_a_live_reply",
 ])
 async def test_every_begun_generation_is_closed_exactly_once(name):
     client = _client()

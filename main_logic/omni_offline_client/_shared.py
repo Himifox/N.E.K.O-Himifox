@@ -247,6 +247,37 @@ def _find_by_identity(messages, index: int, message) -> int:
     return next((i for i, item in enumerate(messages) if item is message), -1)
 
 
+# The generation a ``prompt_ephemeral`` reply streamed under, set on the saved
+# message object itself (like ``_answered_chunk``'s flag): it is neither sent
+# to a provider nor saved anywhere, only read by ``_cancelled_turn_end``.
+_REPLY_GENERATION_ATTR = "_reply_generation"
+
+
+def _cancelled_turn_end(history, start: int, generation: int) -> int:
+    """Where the turn anchored at ``history[start]`` ends: the index of the
+    first message of a later turn after it, ``len(history)`` when none.
+
+    A later turn starts at a user message, or at a proactive reply that began
+    after this turn's ``generation``. Such a reply cannot begin while this
+    turn is in progress, so everything this turn showed came before it. A
+    proactive reply that began earlier (and was displaced by this turn's
+    begin) was shown first and does not end the turn. A proactive reply saved
+    without a generation (``finish_proactive_delivery``) is always later: it
+    is only claimed while no reply is in progress. ``start`` is -1 for a turn
+    that began on an empty history.
+    """
+    for index in range(start + 1, len(history)):
+        message = history[index]
+        if isinstance(message, HumanMessage):
+            return index
+        extra = getattr(message, "additional_kwargs", None)
+        if isinstance(extra, dict) and extra.get("dialog_source") == "proactive":
+            began = getattr(message, _REPLY_GENERATION_ATTR, None)
+            if not isinstance(began, int) or began > generation:
+                return index
+    return len(history)
+
+
 def _same_route(
     base_url_a, api_key_a, provider_type_a,
     base_url_b, api_key_b, provider_type_b,

@@ -763,7 +763,10 @@ class StreamingMixin:
                             request_id=message.get("request_id"),
                         )
                         await self._emit_agent_callback_turn_end(message.get("request_id"))
-                        await self._settle_owed_turn_wrap_up()
+                        # An owed wrap-up is not settled here: typed input only
+                        # reaches this through _process_stream_input, whose hold
+                        # (_with_owed_wrap_up_held) pays it once this input has
+                        # been handled; a settle here would return at once.
                         self._fire_task(self._publish_openclaw_magic_command(openclaw_magic_command))
                         logger.info("[%s] text input sent explicit openclaw magic command", self.lanlan_name)
                         return

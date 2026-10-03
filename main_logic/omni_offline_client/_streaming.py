@@ -21,6 +21,7 @@ from main_logic.proactive_delivery import (
 )
 
 from ._shared import (
+    _cancelled_turn_end,
     _find_by_identity,
     _same_route,
     AIMessage,
@@ -68,7 +69,11 @@ from ._media import (
 from ._genai_support import (
     _should_use_genai_sdk,
 )
-from ._lifecycle import _tracked_reply_call, _with_dialog_slop
+from ._lifecycle import (
+    _retire_replaced_clients,
+    _tracked_reply_call,
+    _with_dialog_slop,
+)
 
 
 def _strip_route_bound_tool_call_extras(history) -> int:
@@ -158,7 +163,12 @@ class _StreamingMixin:
             if self._conversation_history and isinstance(self._conversation_history[0], SystemMessage):
                 self._conversation_history[0] = SystemMessage(content=self._instructions)
 
-    async def switch_model(self, new_model: str, use_vision_config: bool = False) -> None:
+    async def switch_model(
+        self,
+        new_model: str,
+        use_vision_config: bool = False,
+        abandon_if: Optional[Callable[[], bool]] = None,
+    ) -> bool:
         """
         Temporarily switch to a different model (e.g., vision model).
         This allows dynamic model switching for vision tasks.
@@ -166,6 +176,17 @@ class _StreamingMixin:
         Args:
             new_model: The model to switch to
             use_vision_config: If True, use vision_base_url and vision_api_key
+            abandon_if: Asked right before the new client replaces the
+                current one, after the awaits that build it. When it returns
+                True the switch is dropped and the current client stays:
+                ``prompt_ephemeral`` passes its own decline check, so a reply
+                that began meanwhile is not moved onto another client.
+
+        Returns False only when ``abandon_if`` dropped the switch.
+
+        The replaced clients are closed once no reply call is in flight
+        (``_retire_replaced_clients``), never under a reply still streaming
+        on one.
         """
         lock = getattr(self, "_model_switch_lock", None)
         if lock is None:
@@ -174,7 +195,7 @@ class _StreamingMixin:
 
         async with lock:
             if not new_model:
-                return
+                return True
 
             # 选择使用的 API 配置
             if use_vision_config:
@@ -194,7 +215,7 @@ class _StreamingMixin:
                 base_url, api_key, provider_type,
                 self.base_url, self.api_key, getattr(self, "provider_type", None),
             ):
-                return
+                return True
 
             logger.info(f"Switching model from {self.model} to {new_model}")
 
@@ -230,6 +251,15 @@ class _StreamingMixin:
                 timeout=DIALOG_LLM_STREAM_TIMEOUT_SECONDS,  # hang-guard; generous so normal/long replies aren't truncated
                 provider_type=provider_type,
             )
+            # Nothing below awaits until the swap, so this answer still holds
+            # when the new client goes in.
+            if abandon_if is not None and abandon_if():
+                logger.info("switch_model: switch to %s dropped by the caller", new_model)
+                try:
+                    await new_llm.aclose()
+                except Exception as e:
+                    logger.warning(f"switch_model: unused client aclose failed: {e}")
+                return False
             # 端点是否真的换了 —— 换 endpoint（或换账号）才需要清掉历史里
             # 那些只有铸造方看得懂的 vendor 私有字段。同一个 endpoint 只换
             # 模型（conversation → vision 都在同一家）不能清：那正是签名要
@@ -278,31 +308,25 @@ class _StreamingMixin:
             # 换了模型就重新给工具一次机会：拒收 tools 是上一个模型的能力限制。
             self._openai_tools_unsupported = False
             self._openai_tools_unsupported_with_images = False
+            # Closed once no reply call can still be streaming on them.
+            closers = [lambda: old_llm.aclose()]
             if old_genai is not None and hasattr(old_genai, "close"):
-                try:
-                    await asyncio.to_thread(old_genai.close)
-                except Exception as _close_err:
-                    logger.warning(
-                        "switch_model: old genai client close failed: %s",
-                        _close_err,
-                    )
-            try:
-                await old_llm.aclose()
-            except Exception as e:
-                logger.warning(f"switch_model: old client aclose failed: {e}")
+                closers.insert(0, lambda: asyncio.to_thread(old_genai.close))
+            await _retire_replaced_clients(self, closers)
+        return True
 
-    def _commit_cancelled_reply(self, anchor, reply) -> None:
+    def _commit_cancelled_reply(self, anchor, reply, generation: int) -> None:
         """Commit the visible part of a cancelled reply to its own turn.
 
         ``anchor`` is the last message this turn owns in history (its user
         message, or for ``prompt_ephemeral`` the message it saw last; ``None``
-        when history was empty). The cancelling turn may already have appended
-        its own user message, so the reply goes before the first
-        ``HumanMessage`` after the anchor instead of at the end. Tool-image
-        turns are dicts, not ``HumanMessage``, and belong to this turn. An
-        anchor that is gone (history rebuilt) falls back to appending, and an
-        empty reply is never written: some providers reject an empty
-        assistant message.
+        when history was empty) and ``generation`` the one it streamed under.
+        A turn that began after the cancellation may already have saved its
+        user message or a proactive reply, so the reply goes where this turn
+        ends (``_cancelled_turn_end``) instead of at the end. Tool-round
+        messages are dicts and belong to this turn. An anchor that is gone
+        (history rebuilt) falls back to appending, and an empty reply is
+        never written: some providers reject an empty assistant message.
         """
         if not str(getattr(reply, "content", "") or "").strip():
             return
@@ -310,13 +334,7 @@ class _StreamingMixin:
         start = -1 if anchor is None else _find_by_identity(history, -1, anchor)
         position = len(history)
         if anchor is None or start >= 0:
-            position = next(
-                (
-                    i for i in range(start + 1, len(history))
-                    if isinstance(history[i], HumanMessage)
-                ),
-                len(history),
-            )
+            position = _cancelled_turn_end(history, start, generation)
         history.insert(position, reply)
 
     def _commit_reply(self, anchor, text: str, generation: int) -> bool:
@@ -327,18 +345,18 @@ class _StreamingMixin:
         or summary sent to TTS) is a cancellation point, so each commit decides
         where to write at the moment it writes: a live or guard-paused reply is
         appended, a cancelled or displaced one goes through
-        ``_commit_cancelled_reply`` and never lands after the interrupting
-        turn's user message. A caller keeps a reply that is no longer live out
-        of the repetition check too.
+        ``_commit_cancelled_reply`` and never lands after a turn that began
+        after it. A caller keeps a reply that is no longer live out of the
+        repetition check too.
         """
         if self._active_response_generation != generation:
-            self._commit_cancelled_reply(anchor, AIMessage(content=text))
+            self._commit_cancelled_reply(anchor, AIMessage(content=text), generation)
             return False
         if text:
             self._conversation_history.append(AIMessage(content=text))
         return True
 
-    def _trim_cancelled_round_text(self, anchor, shown: str) -> None:
+    def _trim_cancelled_round_text(self, anchor, shown: str, generation: int) -> None:
         """Make a kept, cancelled tool round hold only the text that was shown.
 
         The tool loop writes its own stream buffer into the round, which also
@@ -346,25 +364,48 @@ class _StreamingMixin:
         think residual, a summary tail). A cancelled turn never emits that,
         so the next request must not see it either.
         """
+        kept = self._last_tool_round_of(anchor, generation)
+        if kept is not None:
+            kept["content"] = shown
+
+    def _last_tool_round_of(self, anchor, generation: int):
+        """The last tool round (assistant ``tool_calls`` turn) kept in history
+        for the turn that owns ``anchor`` and streamed under ``generation``;
+        None if it has none, or ``anchor`` is gone."""
         history = self._conversation_history
         start = _find_by_identity(history, -1, anchor)
         if start < 0:
-            return
-        # This turn ends at the first user message after its own, the same
-        # boundary _commit_cancelled_reply uses; past it is the interrupting
-        # turn, whose tool rounds must not be touched.
+            return None
+        # This turn ends where _commit_cancelled_reply puts its reply; past
+        # that is a later turn, whose tool rounds must not be touched.
         kept = None
-        for message in history[start + 1:]:
-            if isinstance(message, HumanMessage):
-                break
+        for message in history[start + 1:_cancelled_turn_end(history, start, generation)]:
             if (
                 isinstance(message, dict)
                 and message.get("role") == "assistant"
                 and message.get("tool_calls")
             ):
                 kept = message
-        if kept is not None:
+        return kept
+
+    def _keep_shown_text_of_cut_stream(
+        self, anchor, shown: str, segment_round, generation: int,
+    ) -> None:
+        """Keep what a reply had shown when its task was cancelled mid-stream.
+
+        A cancelled task never reaches the check after ``stream_text``'s
+        stream loop, so this does what that check, or the tool round
+        sentinel before it, would have done with ``shown`` (the text shown
+        since the last persisted tool round). A tool round kept after
+        ``segment_round`` (the one the last sentinel reported) already holds
+        that text, its sentinel lost to the cancellation: it is trimmed to
+        it. Otherwise the text is committed as a cancelled reply, in order.
+        """
+        kept = self._last_tool_round_of(anchor, generation)
+        if kept is not None and kept is not segment_round:
             kept["content"] = shown
+            return
+        self._commit_cancelled_reply(anchor, AIMessage(content=shown), generation)
 
     async def _check_repetition(self, response: str) -> bool:
         """
@@ -1036,6 +1077,11 @@ class _StreamingMixin:
         assistant_message_total = ""  # 整轮累计（含 pre-tool），整轮级判定看它
         status_reported = False
         guard_exhausted = False
+        # Set while a cancellation of this task would skip a cancelled-reply
+        # commit (the stream loop, the summary call); see the except below.
+        # ``segment_round`` is the tool round the last sentinel reported.
+        cut_keeps_shown = False
+        segment_round = None
         # Empty-completion 诊断字段重置：每轮 turn 独立，否则会读到上一轮的旧值。
         self._last_finish_reason = None
         self._last_block_reason = None
@@ -1217,6 +1263,7 @@ class _StreamingMixin:
                         # 工具图上总线时带上本轮的 turn_id，和这一轮的用户帧
                         # 归到同一个回合下；普通文本轮没有 turn_id，那里就是 None。
                         _focus_overrides["_tool_frames_turn_id"] = turn_id
+                        cut_keeps_shown = True
                         async for chunk in self._astream_visible_with_tools(
                             self._conversation_history,
                             _tool_image_slots=_turn_tool_image_slots,
@@ -1270,14 +1317,21 @@ class _StreamingMixin:
                                 # A cancelled round still reports what it kept
                                 # (see _settle_unfinished_tool_round); reset the
                                 # state below but emit nothing further, and keep
-                                # only the text that reached UI/TTS in it.
+                                # only the text that reached UI/TTS in it. A
+                                # round whose turn left history went with it,
+                                # its text included.
                                 _round_cancelled = (
                                     self._active_response_generation != response_generation
                                 )
                                 if _round_cancelled:
-                                    self._trim_cancelled_round_text(user_message, assistant_message)
+                                    self._trim_cancelled_round_text(
+                                        user_message, assistant_message, response_generation,
+                                    )
                                 length_guard_persisted_prefix = assistant_message_total
                                 assistant_message = ""
+                                segment_round = self._last_tool_round_of(
+                                    user_message, response_generation,
+                                )
                                 # 重置围栏 / prefix buffer：下一段是新的语义
                                 # 单元（模型基于 tool 结果重新出文本），不应
                                 # 复用之前的 fence / prefix 状态。
@@ -1542,6 +1596,7 @@ class _StreamingMixin:
                                         break
                             elif content and not content.strip():
                                 logger.debug(f"OmniOfflineClient: 过滤空白内容 - content_repr: {repr(content)[:100]}")
+                        cut_keeps_shown = False
 
                         # A guard pause still owns this generation. Cancellation
                         # or replacement does not: discard every un-emitted
@@ -1551,6 +1606,7 @@ class _StreamingMixin:
                         if self._active_response_generation != response_generation:
                             self._commit_cancelled_reply(
                                 user_message, AIMessage(content=assistant_message),
+                                response_generation,
                             )
                             break
 
@@ -1910,10 +1966,12 @@ class _StreamingMixin:
                                         ui_enabled=False, tts_enabled=True,
                                     )
                             else:
+                                cut_keeps_shown = True
                                 summary_text = await self._summarize_tail_for_tts(
                                     prefix=summary_prefix_for_history,
                                     tail=summary_tail_buffer,
                                 )
+                                cut_keeps_shown = False
                                 # The summary call is a cancellation point of its
                                 # own: a turn cancelled while it ran must not
                                 # reach TTS or commit prefix + summary. Keep what
@@ -1921,6 +1979,7 @@ class _StreamingMixin:
                                 if self._active_response_generation != response_generation:
                                     self._commit_cancelled_reply(
                                         user_message, AIMessage(content=assistant_message),
+                                        response_generation,
                                     )
                                     break
                                 if summary_text:
@@ -1973,6 +2032,8 @@ class _StreamingMixin:
                         break
 
                 except _llm_retry_error_types() as e:
+                    # A failed stream's text is discarded below, never kept.
+                    cut_keeps_shown = False
                     from openai import InternalServerError
 
                     error_type = type(e).__name__
@@ -2053,6 +2114,7 @@ class _StreamingMixin:
                             status_reported = True
                         break
                 except Exception as e:
+                    cut_keeps_shown = False
                     is_api_key_rejected = _is_api_key_rejected_error(e)
                     # Telemetry：D1 流失里 LLM 调用失败是大头。error_class 低基数
                     # （exception 类名）；api_key_invalid 单独计——首日配错 key
@@ -2122,6 +2184,19 @@ class _StreamingMixin:
                         await self.on_status_message(json.dumps(status_error_payload))
                         status_reported = True
                     break
+        except asyncio.CancelledError:
+            # The independent-ASR child task is cancelled outright: by
+            # handle_interruption once it has taken this reply over, or with
+            # the reply still live by close() or a cancelled voice turn (its
+            # completion then still runs). Either way the checks after the
+            # stream loop and the summary call never run: keep what was
+            # shown, as they would have.
+            if cut_keeps_shown:
+                self._keep_shown_text_of_cut_stream(
+                    user_message, assistant_message, segment_round,
+                    response_generation,
+                )
+            raise
         finally:
             # 先于其它收尾：把 base64 从历史里摘掉，别让它跟着后续每一次请求
             # 走（token 计数器把图像部分算成短占位符，截断器看不见它）。

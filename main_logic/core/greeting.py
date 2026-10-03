@@ -592,10 +592,11 @@ class GreetingMixin:
             return
 
         # 先确认投递通道可用，再消费节日预算（避免 session 拉起失败白扣次数）
-        # 如果已有 text session 且空闲，直接走投递逻辑
-        if isinstance(self.session, OmniOfflineClient) and not getattr(self.session, "_is_responding", False):
-            pass
-        else:
+        # An existing text session is reused even while a reply is in progress
+        # on it (live, guard-paused or awaiting its completion): the claim
+        # below (try_start_proactive) refuses then, while start_session would
+        # end that session and cut its reply.
+        if not isinstance(self.session, OmniOfflineClient):
             # 没有 session 或不是 text session → 主动拉起
             # ── 拉起前再次检查：避免与即将到来的语音 session 竞争 ──
             if self._is_voice_session_active_or_starting():
@@ -825,7 +826,7 @@ class GreetingMixin:
             return
 
         # 原子 SM claim：与 trigger_agent_callbacks / /api/proactive_chat 互斥
-        # 并拦截"AI 正在为用户回复"（session._is_responding）的场景
+        # 并拦截回复进行中（session_reply_in_progress）的场景
         if not await self.state.try_start_proactive(session=self.session):
             logger.info(
                 "[%s] trigger_greeting: SM denied claim (phase=%s), skipping",
@@ -985,10 +986,10 @@ class GreetingMixin:
             logger.debug("[%s] trigger_cat_greeting: duration %.0fs below threshold, skipping", self.lanlan_name, duration_seconds)
             return
 
-        # 投递通道：已有空闲 text session 则直接用，否则主动拉起（与 trigger_greeting 对偶）
-        if isinstance(self.session, OmniOfflineClient) and not getattr(self.session, "_is_responding", False):
-            pass
-        else:
+        # 投递通道：已有 text session 则直接用，否则主动拉起（与 trigger_greeting 对偶）。
+        # Reused even while a reply is in progress on it, as in trigger_greeting:
+        # the claim below refuses then; start_session would cut that reply.
+        if not isinstance(self.session, OmniOfflineClient):
             if self._is_voice_session_active_or_starting():
                 logger.info("[%s] trigger_cat_greeting: voice session appeared before text session auto-start, skipping", self.lanlan_name)
                 return
