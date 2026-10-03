@@ -34,6 +34,7 @@ from tests.unit.test_core_game_route_memory_contract import (
 from tests.unit.test_offline_late_completion_turn_ownership import _ParkedBackoff
 from tests.unit.test_offline_provider_frame_publish import _connection_error
 from tests.unit.test_offline_turn_cancellation_e2e import _client, _text, _tool_calls
+from utils.llm_client import AIMessage, HumanMessage
 
 pytestmark = pytest.mark.unit
 
@@ -2682,3 +2683,77 @@ async def test_a_recovery_without_request_id_taken_over_before_its_loop_sends_no
     assert ("system", "turn end") not in after
     assert _turn_ends(mgr) == []
     assert not [m for m in mgr.sync_message_queue.messages if m.get("type") == "json"]
+
+
+def _history_messages(session):
+    return [
+        (type(m).__name__, m.content) for m in session._conversation_history
+        if isinstance(m, (AIMessage, HumanMessage))
+    ]
+
+
+@pytest.mark.parametrize("request_id", [None, "req-A"])
+async def test_a_recovery_taken_over_in_its_body_send_still_keeps_the_body_in_history(
+    monkeypatch, request_id,
+):
+    """The takeover lands in the WebSocket send of the recovery body, after
+    the body was published to cross_server: the steps after it stop, but the
+    body the user saw and memory recorded is in history, before anything the
+    taker adds."""
+    session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, request_id)
+    facts, release, holder = {}, asyncio.Event(), {}
+    setup, interrupted = _held_typed_input(mgr, session, facts, release)
+
+    async def send(text, is_first_chunk=False, turn_id=None, *, request_id=None,
+                   on_published=None, publish_if=None, **_kw):
+        # send_lanlan_response's order: guard, sync publish, on_published,
+        # then the WebSocket send, where the takeover lands.
+        if publish_if is not None and not publish_if():
+            return None
+        mgr.sync_message_queue.put({"type": "json", "data": {"type": "gemini_response", "text": text}})
+        if on_published is not None:
+            on_published(0.0)
+        if "task" not in holder:
+            holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
+            await interrupted.wait()
+        await mgr.websocket.send_json({"type": "gemini_response", "text": text})
+        return True
+
+    mgr.send_lanlan_response = send
+    await _drive_final_discard(session, mgr, reply_turn, request_id)
+    session._conversation_history.append(HumanMessage(content="B"))
+    release.set()
+    await holder["task"]
+    await _drain()
+    assert facts["interrupted"] is True
+    history = _history_messages(session)
+    assert history[0] == ("HumanMessage", "hi")
+    assert history[1][0] == "AIMessage" and history[1][1]
+    assert history[2] == ("HumanMessage", "B")
+
+
+async def test_a_takeover_in_the_discards_tts_cleanup_still_tells_the_frontend(monkeypatch):
+    """The takeover lands in the discard's TTS cleanup await: cross_server
+    has already dropped the text, so the frontend gets its
+    ``response_discarded`` too, sent before that await."""
+    session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, "req-A")
+    facts, release, holder = {}, asyncio.Event(), {}
+    setup, interrupted = _held_typed_input(mgr, session, facts, release)
+    real_clear = mgr._clear_tts_pipeline
+
+    async def clear():
+        if "task" not in holder:
+            holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
+            await interrupted.wait()
+        await real_clear()
+
+    mgr._clear_tts_pipeline = clear
+    await _drive_final_discard(session, mgr, reply_turn, "req-A")
+    release.set()
+    await holder["task"]
+    await _drain()
+    sync = [m.get("data") for m in mgr.sync_message_queue.messages if isinstance(m, dict)]
+    ws_types = [m.get("type") for m in mgr.websocket.sent]
+    assert facts["interrupted"] is True
+    assert "response_discarded_clear" in sync
+    assert "response_discarded" in ws_types

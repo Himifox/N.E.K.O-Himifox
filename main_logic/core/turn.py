@@ -420,10 +420,13 @@ class TurnMixin:
 
         A bound reply whose turn already ended (``_ReplyTurn.turn_ended``: a
         final discard sent its turn end while its generation was still live)
-        is not closed again: that discard path runs its own wrap-up, and the
-        frontend already has (or is being sent) its turn end. Only its request
-        id is released, as a close would, should the discard not have reached
-        its own release yet; nothing is owed and nothing returned.
+        is not closed again: the frontend already has (or is being sent) its
+        turn end. Only its request id is released, as a close would, should
+        the discard not have reached its own release yet, and nothing is
+        returned. Every bound reply taken over is marked ``taken_over``; a
+        discard recovery still running for it reads that, stops sending, and
+        records and settles its own wrap-up (``_settle_owed_turn_wrap_up``)
+        rather than running it inside the taker's hold.
         """
         owner = _taken_over_reply_turn(kind)
         if owner is not None:
@@ -933,7 +936,8 @@ class TurnMixin:
         (``_reply_turn_is_current``) it leaves every shared effect (TTS done,
         turn end, AI text flush, wrap-up) to that turn. When a final discard
         already ended its turn (``_ReplyTurn.turn_ended``) it does nothing: the
-        discard sent that turn end and has already settled the wrap-up.
+        discard sent that turn end and has settled the wrap-up itself, or
+        recorded it as owed when the reply was taken over meanwhile.
 
         Unbound completions read the shared fields as they stand: realtime
         clients, which guard their own turn ends, and the Offline replies Core
@@ -1189,7 +1193,12 @@ class TurnMixin:
         # 和 turn end，再 compare-and-clear 掉 request id，等它跑完再判产权就
         # 恒为 False，clear 永远发不出去，cross_server 会把丢弃版和恢复正文
         # 一起写进记忆。
-        if may_clear_shared_output():
+        #
+        # 前端的 response_discarded 是同一份共享输出的另一半：用同一个产权
+        # 快照、赶在 TTS 清理的 await 之前发。否则接管落在那次 await 里时，
+        # cross_server 已经丢掉了这段文本，前端气泡却还留着它。
+        owns_shared_output = may_clear_shared_output()
+        if owns_shared_output:
             if self._current_ai_turn_text:
                 # That text already reached cross_server, whose assistant turn
                 # stays open until a turn end: should this reply's close be
@@ -1201,12 +1210,11 @@ class TurnMixin:
                     'type': 'system',
                     'data': 'response_discarded_clear'
                 })
-            await self._clear_tts_pipeline()
 
         # A request-bound discard is only relevant while that request still owns
         # the shared response. Emitting a stale A notification after B becomes
         # active would make the frontend clear B's bubble, buffers, and audio.
-        if may_clear_shared_output() and \
+        if owns_shared_output and \
                 self.websocket and hasattr(self.websocket, 'client_state') and \
                 self.websocket.client_state == self.websocket.client_state.CONNECTED:
             try:
@@ -1222,6 +1230,9 @@ class TurnMixin:
                 })
             except Exception as e:
                 logger.warning(f"发送 response_discarded 到前端失败: {e}")
+
+        if owns_shared_output:
+            await self._clear_tts_pipeline()
 
         # RESPONSE_TOO_LONG 最终丢弃时：发送可爱回复 + 用角色 TTS 音色念出来。
         # RESPONSE_LENGTH_TRUNCATED：reroll 耗尽后回退到最后句末标点截断的恢复路径，
@@ -1244,6 +1255,11 @@ class TurnMixin:
                 # cutting the steps below must still end that turn there. Not
                 # before: a body cut before it was published opened nothing.
                 self._discarded_turn_open = True
+                # History gets the body at the same moment, ownership just
+                # confirmed (publish_if): a takeover in the send's await stops
+                # the steps below, but what the user saw and memory recorded
+                # still lands in history, before the taker's user message.
+                _append_recovery_history()
 
             try:
                 if _truncated_text is not None:
@@ -1284,7 +1300,7 @@ class TurnMixin:
                     # 文本处理跟 send_lanlan_response 内部保持一致（剥表情标签）。
                     self._current_ai_turn_text += self.emotion_pattern.sub('', body_text)
 
-                async def _append_recovery_history() -> None:
+                def _append_recovery_history() -> None:
                     # 仅当本轮**不是** ephemeral（即非 avatar_interaction 等
                     # persist_response=False 的路径）时才写历史。avatar_interaction
                     # 触发 RESPONSE_TOO_LONG/TRUNCATED 时本就该和 ephemeral 一致地
@@ -1314,7 +1330,6 @@ class TurnMixin:
                         on_published=_mark_recovery_published,
                         publish_if=may_clear_shared_output,
                     ),
-                    _append_recovery_history,
                 ]
                 if self.use_tts:
                     # 喂给 TTS 管线用角色音色念。done 信号也要带

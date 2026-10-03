@@ -197,6 +197,10 @@ def _make_manager():
         mgr.user_activity.append(interrupted_speech_id)
 
     async def send_lanlan_response(text, is_first_chunk=False, turn_id=None, metadata=None, **_kwargs):
+        # 真实实现在发布边界复查 publish_if，发布后同步调用 on_published。
+        publish_if = _kwargs.get("publish_if")
+        if publish_if is not None and not publish_if():
+            return None
         mgr.sent_responses.append({
             "text": text,
             "is_first_chunk": is_first_chunk,
@@ -209,6 +213,9 @@ def _make_manager():
         # 都会对"send 到底 track 了没有"失明。
         if _kwargs.get("track_ai_turn", True):
             mgr._current_ai_turn_text += text
+        on_published = _kwargs.get("on_published")
+        if on_published is not None:
+            on_published(0.0)
 
     async def ensure_tts_pipeline_alive():
         return None
