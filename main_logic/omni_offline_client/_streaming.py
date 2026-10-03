@@ -361,7 +361,10 @@ class _StreamingMixin:
         start = -1 if anchor is None else _find_by_identity(history, -1, anchor)
         position = len(history)
         if anchor is None or start >= 0:
-            position = _cancelled_turn_end(history, start, generation)
+            position = _cancelled_turn_end(
+                history, start, generation,
+                skip_messages=tuple(self._inflight_turn_instructions()),
+            )
         history.insert(position, reply)
 
     def _commit_reply(

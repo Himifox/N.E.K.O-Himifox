@@ -354,6 +354,36 @@ async def test_concurrent_proactive_turn_does_not_see_a_text_turns_card(monkeypa
     assert client._inflight_turn_instructions() == [other_turns_card]
 
 
+def test_a_cancelled_reply_lands_after_its_tool_rounds_not_before_its_instruction():
+    """The turn-local instruction is a HumanMessage right after the user
+    message, but it starts no turn: a cancelled reply must land after the
+    tool rounds that followed it. Otherwise, once the instruction leaves
+    history, the reply sits before its own tool rounds."""
+    from main_logic.omni_offline_client._shared import _cancelled_turn_end
+    from utils.llm_client import AIMessage, HumanMessage
+
+    client = _make_client()
+    user = HumanMessage(content="raw user message")
+    instruction = HumanMessage(content="knowledge card for this turn")
+    tool_round = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}
+    tool_result = {"role": "tool", "tool_call_id": "c1", "content": "{}"}
+    client._conversation_history.extend([user, instruction, tool_round, tool_result])
+    client._inflight_turn_instructions().append(instruction)
+
+    assert _cancelled_turn_end(client._conversation_history, 1, 1) == 2
+    assert _cancelled_turn_end(
+        client._conversation_history, 1, 1, skip_messages=(instruction,),
+    ) == len(client._conversation_history)
+
+    reply = AIMessage(content="shown before the cut")
+    client._commit_cancelled_reply(user, reply, 1)
+
+    assert client._conversation_history[-1] is reply
+    assert client._conversation_history.index(reply) > client._conversation_history.index(
+        tool_result
+    )
+
+
 @pytest.mark.asyncio
 async def test_ephemeral_meme_instruction_is_removed_after_stream_error(monkeypatch):
     from main_logic.omni_offline_client import OmniOfflineClient
