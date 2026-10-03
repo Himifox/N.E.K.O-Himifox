@@ -369,8 +369,14 @@ def bridge_e2e_env(
 
 def test_knowledge_subscription_routes_precede_generic_bridge() -> None:
     from plugin.server.http_app import build_plugin_server_app
+    from tests.fastapi_routes import iter_routes
 
-    paths = [getattr(route, "path", "") for route in build_plugin_server_app().routes]
+    # Effective routes as served: newer FastAPI keeps included routers as a
+    # tree instead of flattening them into app.routes.
+    paths = [
+        getattr(route, "path", "")
+        for route in iter_routes(build_plugin_server_app().routes)
+    ]
 
     assert paths.index("/market/knowledge/subscribe") < paths.index(
         "/market/knowledge/{path:path}"
@@ -874,7 +880,12 @@ async def test_market_install_rejects_invalid_bridge_token_before_side_effects(
     )
 
     assert response.status_code == 403
-    assert response.json() == {"detail": "无效的 bridge token"}
+    assert response.json() == {
+        "detail": {
+            "code": "invalid_bridge_token",
+            "message": "无效的 bridge token",
+        }
+    }
     assert not response.headers.get("x-error-code")
 
 
