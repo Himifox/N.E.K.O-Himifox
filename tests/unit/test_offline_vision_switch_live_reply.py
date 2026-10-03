@@ -362,3 +362,58 @@ async def test_a_close_cancelled_in_its_own_sweep_leaves_the_rest_queued():
     await asyncio.wait_for(client.close(), 5)
     assert done == ["third"]
     assert client._retired_client_closers == []
+
+
+def _genai_halves_closed(genai_client):
+    api = genai_client._api_client
+    return api._httpx_client.is_closed, api._async_httpx_client.is_closed
+
+
+async def test_a_switch_closes_both_halves_of_the_replaced_genai_client(monkeypatch):
+    """Replies stream on ``genai.Client.aio``; the client's own ``close()``
+    releases only its sync half, so the switch closes the async one too."""
+    from google import genai
+
+    client = _client()
+    switch = _Switch(client, monkeypatch)
+    switch.gate.set()
+    old_genai = genai.Client(api_key="test-key")
+    client._genai_client = old_genai
+
+    assert await client.prepare_for_tool_images() is True
+
+    assert client._genai_client is None
+    assert _genai_halves_closed(old_genai) == (True, True)
+    assert switch.old.closed == 1
+
+
+async def test_close_closes_both_halves_of_the_genai_client():
+    from google import genai
+
+    client = _client()
+    genai_client = genai.Client(api_key="test-key")
+    client._genai_client = genai_client
+
+    await client.close()
+
+    assert client._genai_client is None
+    assert _genai_halves_closed(genai_client) == (True, True)
+
+
+async def test_a_failing_async_half_still_closes_the_sync_half():
+    client = _client()
+    closed = []
+
+    async def aclose():
+        closed.append("aio")
+        raise RuntimeError("aclose failed")
+
+    genai_client = SimpleNamespace(
+        aio=SimpleNamespace(aclose=aclose), close=lambda: closed.append("sync"),
+    )
+    client._genai_client = genai_client
+
+    await client.close()
+
+    assert closed == ["aio", "sync"]
+    assert client._genai_client is None

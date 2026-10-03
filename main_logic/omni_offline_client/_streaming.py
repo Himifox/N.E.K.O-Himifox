@@ -70,6 +70,7 @@ from ._genai_support import (
     _should_use_genai_sdk,
 )
 from ._lifecycle import (
+    _close_genai_client,
     _retire_replaced_clients,
     _tracked_reply_call,
     _with_dialog_slop,
@@ -299,8 +300,8 @@ class _StreamingMixin:
                     )
             # 路由旗标随之刷新；旧 _genai_client 抛弃（若 api_key 变了它已失效）。
             # genai.Client 内部持有 httpx 连接池——直接 = None 靠 GC 回收虽不
-            # 是 leak，但提早 close() 能马上释放底层连接（SDK 没暴露 aclose，
-            # close 是同步方法，放进 to_thread 不阻事件循环）。
+            # 是 leak，但提早关掉能马上释放底层连接。回复走的是 .aio 那一半，
+            # 同步 close() 关不到它，所以两半都关（_close_genai_client）。
             old_genai = self._genai_client
             self._use_genai_sdk = _should_use_genai_sdk(self.model, self.base_url)
             self._genai_client = None
@@ -310,8 +311,8 @@ class _StreamingMixin:
             self._openai_tools_unsupported_with_images = False
             # Closed once no reply call can still be streaming on them.
             closers = [lambda: old_llm.aclose()]
-            if old_genai is not None and hasattr(old_genai, "close"):
-                closers.insert(0, lambda: asyncio.to_thread(old_genai.close))
+            if old_genai is not None:
+                closers.insert(0, lambda: _close_genai_client(old_genai))
             await _retire_replaced_clients(self, closers)
         return True
 
@@ -1090,9 +1091,11 @@ class _StreamingMixin:
         # right before every commit, so an await after one (the repetition
         # check) never writes the reply twice, and before every guard
         # decision, whose text is either committed there or discarded. Every
-        # await while it is set leaves in ``assistant_message`` what this turn
-        # would commit after it; see the except below. ``segment_round`` is
-        # the tool round the last sentinel reported.
+        # await while it is set leaves in ``assistant_message`` the text shown
+        # so far, which is what this turn would commit after it; a summary
+        # replaces the UI-only tail only once its TTS send has returned. See
+        # the except below. ``segment_round`` is the tool round the last
+        # sentinel reported.
         cut_keeps_shown = False
         segment_round = None
         # Empty-completion 诊断字段重置：每轮 turn 独立，否则会读到上一轮的旧值。
@@ -2009,15 +2012,17 @@ class _StreamingMixin:
                                         "(tail=%d chars → summary=%d chars)",
                                         len(summary_tail_buffer), len(summary_text),
                                     )
-                                    # history = prefix + summary，与 TTS 听到的对齐。
-                                    # Set before the send: a cancellation during
-                                    # it keeps this, as the commit below would.
-                                    assistant_message = summary_prefix_for_history + summary_text
                                     if self.on_text_delta:
                                         await self.on_text_delta(
                                             summary_text, False,
                                             ui_enabled=False, tts_enabled=True,
                                         )
+                                    # history = prefix + summary，与 TTS 听到的对齐。
+                                    # Only once the send has returned: a cut while
+                                    # it waits (for the TTS cache lock) has not
+                                    # queued the summary, and keeps the shown text
+                                    # like a cut in the summary call.
+                                    assistant_message = summary_prefix_for_history + summary_text
                                 else:
                                     logger.info(
                                         "OmniOfflineClient summary: 摘要失败/为空，"
@@ -2215,7 +2220,7 @@ class _StreamingMixin:
             # completion then still runs). Either way the commit this turn
             # was heading for (after the stream loop, the end-of-stream flush
             # or the summary epilogue) never runs: keep what was shown, as it
-            # would have.
+            # would have, but never a summary its send had not yet queued.
             if cut_keeps_shown:
                 self._keep_shown_text_of_cut_stream(
                     user_message, assistant_message, segment_round,

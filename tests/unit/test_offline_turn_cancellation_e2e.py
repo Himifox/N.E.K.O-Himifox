@@ -9,6 +9,7 @@ these red. Each test says which of those it pins.
 """
 import asyncio
 import json
+import queue
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,6 +17,7 @@ import pytest
 
 import main_logic.omni_offline_client._genai_support as _ofc_genai
 import main_logic.omni_offline_client._streaming as _ofc_streaming
+from main_logic.core.turn import TurnMixin
 from main_logic.tool_calling import ToolDefinition, ToolImage, ToolResult
 from tests.unit.test_offline_provider_frame_publish import _make_client, _png_b64
 from tests.unit.test_tool_calling import (
@@ -1243,8 +1245,8 @@ async def test_a_cancelled_round_whose_turn_left_history_is_not_put_back():
 # The independent-ASR child task is cancelled outright by the interruption
 # that takes its reply over, so none of the turn's own checks run. The
 # end-of-stream flush and the summary epilogue still emit text before the
-# reply commits; a cut there keeps what that commit would have written, once,
-# and never text a guard discards.
+# reply commits; a cut there keeps the text shown so far, once: never text a
+# guard discards, nor a summary its send had not yet queued.
 
 def _parked_when(predicate):
     """An ``on_text_delta`` that parks for good in the first send matching
@@ -1355,14 +1357,21 @@ async def test_a_task_cut_in_the_flush_after_a_tool_round_keeps_only_its_segment
     ]
 
 
+def _shown(client):
+    return "".join(
+        call.args[0] for call in client.on_text_delta.await_args_list
+        if call.kwargs.get("ui_enabled", True)
+    )
+
+
 @pytest.mark.parametrize("epilogue", ["short_tail", "summary", "summary_failed"])
-async def test_a_task_cut_in_the_summary_epilogue_keeps_what_its_commit_would(
+async def test_a_task_cut_in_the_summary_epilogue_keeps_the_shown_reply(
     monkeypatch, epilogue,
 ):
-    """The summary epilogue sends the tail, or its summary, to TTS before
-    the reply commits. Cut in that send, the reply keeps what the commit
-    would have written: the shown text when the tail is read out, the
-    prefix and the summary when the summary is (never the UI-only tail)."""
+    """The summary epilogue sends the tail, or its summary, to TTS only,
+    before the reply commits. Cut in that send, the reply keeps the text
+    the UI showed, as a cut in the summary call does: what the commit writes
+    when the tail is read out, and never a summary that was not queued."""
     summary = "总之就这样啦" if epilogue == "summary" else None
     text = _SUMMARY_SHORT_TAIL if epilogue == "short_tail" else _SUMMARY_LONG_TAIL
     client = _summary_client(monkeypatch, text, summary)
@@ -1370,14 +1379,85 @@ async def test_a_task_cut_in_the_summary_epilogue_keeps_what_its_commit_would(
         lambda _text_, kw: kw.get("ui_enabled") is False,
     )
     await _cut_voice_turn(client, entered)
-    shown = "".join(
-        call.args[0] for call in client.on_text_delta.await_args_list
-        if call.kwargs.get("ui_enabled", True)
-    )
-    assert shown == text
-    kept = _SUMMARY_PREFIX + summary if summary else text
+    assert _shown(client) == text
     assert _history_shape(client) == [
-        ("human", "Q1", None), ("ai", kept, None), ("human", "Q2", None),
+        ("human", "Q1", None), ("ai", text, None), ("human", "Q2", None),
+    ]
+
+
+def _real_tts_side(client):
+    """Send ``client``'s text through the real ``handle_text_data`` of a bare
+    manager (the UI publish stays the recording mock): ``enqueued`` is what
+    reached the TTS queue, in order."""
+    mgr = SimpleNamespace(
+        _takeover_active=False,
+        use_tts=True,
+        tts_cache_lock=asyncio.Lock(),
+        tts_ready=True,
+        tts_thread=SimpleNamespace(is_alive=lambda: True),
+        tts_response_queue=queue.Queue(),
+        tts_pending_chunks=[],
+        current_speech_id="sid-1",
+        _discard_pending_ai_voice_echo=lambda: None,
+        enqueued=[],
+    )
+    mgr._enqueue_tts_text_chunk = lambda _sid, text: mgr.enqueued.append(text)
+
+    async def send(text, is_first, *, ui_enabled=True, tts_enabled=True):
+        await TurnMixin.handle_text_data(
+            mgr, text, is_first, ui_enabled=False, tts_enabled=tts_enabled,
+        )
+
+    client.on_text_delta = AsyncMock(side_effect=send)
+    return mgr
+
+
+async def test_a_summary_cut_while_its_send_waits_for_the_tts_lock_is_never_written(
+    monkeypatch,
+):
+    """The summary's TTS-only send waits for the TTS cache lock, held by
+    another holder. Cut there, the summary was never queued: the reply keeps
+    the shown text, not prefix + summary."""
+    client = _summary_client(monkeypatch, _SUMMARY_LONG_TAIL)
+    mgr = _real_tts_side(client)
+    real_send = client.on_text_delta.side_effect
+    entered = asyncio.Event()
+
+    async def summarize(prefix, tail):
+        await mgr.tts_cache_lock.acquire()  # taken by another holder meanwhile
+        return "总之就这样啦"
+
+    async def send(text, is_first, **kwargs):
+        if text == "总之就这样啦":
+            entered.set()  # it parks on the lock right after
+        await real_send(text, is_first, **kwargs)
+
+    client._summarize_tail_for_tts = summarize
+    client.on_text_delta.side_effect = send
+    try:
+        await _cut_voice_turn(client, entered)
+    finally:
+        mgr.tts_cache_lock.release()
+    assert "".join(mgr.enqueued) == _SUMMARY_PREFIX
+    assert _shown(client) == _SUMMARY_LONG_TAIL
+    assert _history_shape(client) == [
+        ("human", "Q1", None), ("ai", _SUMMARY_LONG_TAIL, None), ("human", "Q2", None),
+    ]
+
+
+async def test_a_summary_sent_through_the_real_tts_path_is_queued_and_committed(
+    monkeypatch,
+):
+    """Uncut, the summary goes to TTS after the prefix (never the UI-only
+    tail) and the reply commits prefix + summary."""
+    client = _summary_client(monkeypatch, _SUMMARY_LONG_TAIL, "总之就这样啦")
+    mgr = _real_tts_side(client)
+    client._external_voice_submit_task = None
+    await client._run_external_voice_stream("Q1")
+    assert mgr.enqueued[-1] == "总之就这样啦"
+    assert "".join(mgr.enqueued) == _SUMMARY_PREFIX + "总之就这样啦"
+    assert _history_shape(client) == [
+        ("human", "Q1", None), ("ai", _SUMMARY_PREFIX + "总之就这样啦", None),
     ]
 
 
@@ -1408,11 +1488,14 @@ async def test_a_task_cut_while_a_guard_discards_the_reply_keeps_none_of_it(
     assert _history_shape(client) == [("human", "Q1", None), ("human", "Q2", None)]
 
 
-@pytest.mark.parametrize("commit", ["reply", "length_recovery", "gibberish_prefix"])
+@pytest.mark.parametrize(
+    "commit", ["reply", "length_recovery", "summary", "gibberish_prefix"],
+)
 async def test_a_task_cut_after_the_commit_writes_the_reply_once(monkeypatch, commit):
     """The repetition check runs after the reply is written. Cut there, the
-    reply is not written a second time (nor the gibberish tail the summary
-    fallback leaves out)."""
+    reply is not written a second time (nor the UI-only tail its sent
+    summary replaced, nor the gibberish tail the summary fallback leaves
+    out)."""
     if commit == "reply":
         client = _client()
         client.script = [_reply_chunks("openai", "你好呀。")]
@@ -1420,6 +1503,9 @@ async def test_a_task_cut_after_the_commit_writes_the_reply_once(monkeypatch, co
     elif commit == "length_recovery":
         client, _ = _length_guarded_client("name_prefix")
         kept = "先说一句。"
+    elif commit == "summary":
+        client = _summary_client(monkeypatch, _SUMMARY_LONG_TAIL, "总之就这样啦")
+        kept = _SUMMARY_PREFIX + "总之就这样啦"
     else:
         client = _summary_client(monkeypatch, _SUMMARY_GIBBERISH_TAIL)
         kept = _SUMMARY_PREFIX

@@ -72,6 +72,22 @@ def _with_dialog_slop(method):
     return _wrapper
 
 
+async def _close_genai_client(genai_client) -> None:
+    """Close both halves of a ``genai.Client``.
+
+    Replies stream on ``genai_client.aio``, whose async httpx client only its
+    own ``aclose()`` releases; ``close()`` (sync, so run in a thread) releases
+    just the sync one. Both run even if the first one fails.
+    """
+    aio = getattr(genai_client, "aio", None)
+    try:
+        if aio is not None and hasattr(aio, "aclose"):
+            await aio.aclose()
+    finally:
+        if hasattr(genai_client, "close"):
+            await asyncio.to_thread(genai_client.close)
+
+
 async def _retire_replaced_clients(client, closers) -> None:
     """Close the clients ``switch_model`` replaced on ``client``, once nothing
     can still be streaming on them.
@@ -1405,11 +1421,11 @@ class _LifecycleMixin:
             except Exception as e:
                 logger.warning(f"OmniOfflineClient.close: aclose failed: {e}")
             self.llm = None
-        # 同 switch_model：genai.Client 持有 httpx 连接池，关掉它的
-        # 同步 close()（SDK 没暴露 aclose，放 to_thread 不阻事件循环）。
-        if self._genai_client is not None and hasattr(self._genai_client, "close"):
+        # 同 switch_model：genai.Client 的同步、异步两半各持有一个 httpx
+        # 连接池，两个都关（_close_genai_client）。
+        if self._genai_client is not None:
             try:
-                await asyncio.to_thread(self._genai_client.close)
+                await _close_genai_client(self._genai_client)
             except Exception as e:
                 logger.warning(f"OmniOfflineClient.close: genai client close failed: {e}")
             self._genai_client = None
