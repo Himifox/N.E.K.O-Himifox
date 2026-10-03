@@ -363,23 +363,18 @@ class TurnMixin:
         except asyncio.CancelledError as exc:
             # This task was cancelled while the interruption waited for the
             # reply's task (an ASR detector worker closed on an error or a
-            # restart): the reply is taken over all the same, so close it now.
-            # The close is synchronous; its frontend send goes in a task of
-            # its own, never in place of the cancellation.
+            # restart): the reply is taken over all the same, so close it now,
+            # and send its frontend notice before the cancellation goes on, as
+            # below, so it lands before any newer reply. The sends are best
+            # effort and raise nothing; a second cancellation only cuts one
+            # short.
             taken_over = getattr(exc, "interrupted_reply", None)
             if taken_over:
                 frontend_send = self._close_taken_over_offline_reply(
                     taken_over, displaced=False,
                 )
                 if frontend_send is not None:
-                    try:
-                        self._fire_task(frontend_send())
-                    except Exception as send_error:
-                        logger.warning(
-                            "[%s] closing a reply taken over by a cancelled interruption failed: %s",
-                            self.lanlan_name,
-                            send_error,
-                        )
+                    await frontend_send()
             raise
         if not kind:
             return False

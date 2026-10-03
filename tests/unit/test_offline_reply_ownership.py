@@ -2398,3 +2398,39 @@ async def test_an_interrupter_cancelled_in_its_own_wait_still_closes_the_reply(
     assert mgr._current_ai_turn_text == ""
     assert mgr._turn_wrap_up_owed is True
     assert notes == ["语音说到一半，"]  # the half it said, as its own AI turn
+
+
+async def test_a_cancelled_interrupter_sends_the_notice_before_its_cancellation_goes_on(
+    monkeypatch,
+):
+    """The reply a cancelled interrupter took over is bound: its frontend
+    notice goes out before the interrupter's cancellation propagates, as on
+    the normal path, so it cannot land after a newer reply's text."""
+    from main_logic.core._shared import _ReplyTurn
+
+    session, mgr, _notes = _wire_text_path(monkeypatch)
+    voice, streaming = _voice_reply(
+        session, _text("说到一半，"), "park", _text("后半句。"), _text("", "stop"),
+    )
+    await asyncio.wait_for(streaming.wait(), 5)
+    session._active_reply_owner = _ReplyTurn(speech_id="sid-A", request_id="req-A")
+    mgr._active_text_request_id = "req-A"
+    gate = asyncio.Event()
+    real_send = mgr.websocket.send_json
+
+    async def send_json(payload):
+        if payload.get("data") == "turn abandoned":
+            await gate.wait()
+        await real_send(payload)
+
+    mgr.websocket.send_json = send_json
+    interrupter = asyncio.ensure_future(mgr._interrupt_offline_reply(session))
+    await asyncio.sleep(0)
+    interrupter.cancel()
+    await _drain()
+    assert not interrupter.done(), "the cancellation waits for the notice"
+    gate.set()
+    result = (await asyncio.gather(interrupter, return_exceptions=True))[0]
+    assert isinstance(result, asyncio.CancelledError)
+    assert _system(mgr) == [{"type": "system", "data": "turn abandoned", "request_id": "req-A"}]
+    await asyncio.gather(voice, return_exceptions=True)
