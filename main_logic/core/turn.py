@@ -267,7 +267,10 @@ class TurnMixin:
                     if len(self.tts_pending_chunks) == 1:
                         logger.info("TTS未就绪，开始缓存文本chunk...")
                     # 仅在回复首 chunk 尝试拉起，避免每个 chunk 都重试
-                    if is_first_chunk and self.tts_thread and not self.tts_thread.is_alive():
+                    if is_first_chunk and self.tts_thread and (
+                        not self.tts_thread.is_alive()
+                        or not self._tts_runtime_is_current(self._snapshot_tts_runtime())
+                    ):
                         self._respawn_tts_worker()
 
     def _set_conversation_turn_language(self, language: str | None) -> None:
@@ -430,7 +433,7 @@ class TurnMixin:
             return
         await self._finalize_turn_after_emit()
 
-    async def _with_owed_wrap_up_held(self, work):
+    async def _with_owed_wrap_up_held(self, work, *, skip_settle_if=None):
         """Await ``work`` holding an owed wrap-up, then settle it.
 
         For input handling that interrupts the offline reply and then does
@@ -439,19 +442,24 @@ class TurnMixin:
         (``_maybe_handle_mini_game_magic_command``). The interrupted reply's
         task can end in that window, and its idle notification must not pay
         the wrap-up then. Settled once ``work`` is done, unless it was
-        cancelled (a torn-down session resets the debt); a failing settle
-        never replaces an error ``work`` raised.
+        cancelled (a torn-down session resets the debt) or it returned
+        ``skip_settle_if`` (the input was deferred and its replay settles); a
+        failing settle never replaces an error ``work`` raised. Returns what
+        ``work`` returned.
         """
         self._reply_setup_depth = getattr(self, "_reply_setup_depth", 0) + 1
         cancelled = False
+        result = None
         try:
-            return await work
+            result = await work
+            return result
         except asyncio.CancelledError:
             cancelled = True
             raise
         finally:
             self._reply_setup_depth -= 1
-            if not cancelled:
+            deferred = skip_settle_if is not None and result is skip_settle_if
+            if not cancelled and not deferred:
                 try:
                     await self._settle_owed_turn_wrap_up()
                 except Exception as settle_error:
@@ -988,6 +996,7 @@ class TurnMixin:
                         self.summary_triggered_time = datetime.now()
                         self.message_cache_for_new_session = []
                         self.initial_cache_snapshot_len = 0
+                        self._primed_context_snapshot = None
                         self.initial_next_session_context_snapshot_len = 0
                         self.sync_message_queue.put({'type': 'system', 'data': 'renew session'})
 
@@ -2120,7 +2129,10 @@ class TurnMixin:
                     if len(self.tts_pending_chunks) == 1:
                         logger.info("TTS未就绪，开始缓存文本chunk...")
                     # 仅在回复首 chunk 尝试拉起，避免每个 chunk 都重试
-                    if is_first_chunk and self.tts_thread and not self.tts_thread.is_alive():
+                    if is_first_chunk and self.tts_thread and (
+                        not self.tts_thread.is_alive()
+                        or not self._tts_runtime_is_current(self._snapshot_tts_runtime())
+                    ):
                         self._respawn_tts_worker()
 
     async def send_lanlan_response(
@@ -2219,17 +2231,44 @@ class TurnMixin:
                 self._remember_recent_ai_voice_echo(text_clean)
         published_at = time.time()
         self.sync_message_queue.put({"type": "json", "data": message})
+        logger.debug(
+            "[voice-chain] stage=model_text_publish turn_id=%s request_id=%s first=%s text_len=%d",
+            effective_turn_id,
+            effective_request_id,
+            is_first_chunk,
+            len(text_clean),
+        )
         if on_published is not None:
             on_published(published_at)
         if cache_for_new_session and hasattr(self, 'is_preparing_new_session') and self.is_preparing_new_session:
             if not hasattr(self, 'message_cache_for_new_session'):
                 self.message_cache_for_new_session = []
             # 注意：缓存使用原始文本，不翻译（用于记忆等内部处理）
-            if len(self.message_cache_for_new_session) == 0 or self.message_cache_for_new_session[-1]['role']==self.master_name:
-                self.message_cache_for_new_session.append(
-                    {"role": self.lanlan_name, "text": text_clean})
-            elif self.message_cache_for_new_session[-1]['role'] == self.lanlan_name:
-                self.message_cache_for_new_session[-1]['text'] += text_clean
+            # Only guarded proactive deliveries pass expected_speech_id. Each
+            # one gets its own entry marked as such, so the screen-history
+            # guard (NotifyMixin._convert_cache_to_str) never reads two
+            # independent deliveries, or a delivery and a reply, as one chain.
+            # A first chunk under the same speech id is a retry of that
+            # delivery (prompt_ephemeral restarts each attempt with
+            # is_first_chunk=True); it replaces the discarded attempt's text.
+            source = "proactive" if expected_speech_id is not None else None
+            cache = self.message_cache_for_new_session
+            last = cache[-1] if cache else None
+            same_kind = (
+                last is not None
+                and last['role'] == self.lanlan_name
+                and last.get('source') == source
+            )
+            if same_kind and not (source and is_first_chunk):
+                last['text'] += text_clean
+            elif same_kind and last.get('speech_id') == expected_speech_id:
+                last['text'] = text_clean
+            elif last is None or last['role'] in (self.master_name, self.lanlan_name):
+                entry = {"role": self.lanlan_name, "text": text_clean}
+                if source:
+                    entry['source'] = source
+                    entry['speech_id'] = expected_speech_id
+                cache.append(entry)
 
         # WS 发送（可能失败，但 sync/cache 已保存）
         # [DIAG] 切换猫娘后对话框空白问题：仅首 chunk 记录，避免流式刷屏
@@ -2645,9 +2684,8 @@ class TurnMixin:
                 cache_for_new_session=False,
             )
 
-        self._remember_game_speech_correlation(turn_id, speech_correlation_id)
-
         if cached_chunks is not None:
+            self._remember_game_speech_correlation(turn_id, speech_correlation_id)
             # One call, one lock hold: sending frame by frame let an overlapping
             # ordinary/project TTS stream interleave between them, and the
             # frontend schedules decoded chunks in arrival order.
@@ -2696,6 +2734,7 @@ class TurnMixin:
             }
 
         await self.ensure_tts_pipeline_alive()
+        self._remember_game_speech_correlation(turn_id, speech_correlation_id)
         audio_queued = False
         capture_started = False
         completion_supported = bool(

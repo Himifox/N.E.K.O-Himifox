@@ -1027,7 +1027,14 @@ class _LifecycleMixin:
                     except Exception:
                         logger.exception("prompt_ephemeral on_committed callback failed")
             if content_committed and persist_response:
-                reply = AIMessage(content=assistant_message)
+                # Greetings, agent/topic callbacks and voice nudges answer an
+                # instruction, not the user. Mark them like finish_proactive_
+                # delivery does so the screen-history guard never joins them
+                # with the reply to the user's turn (utils/screen_comment_guard).
+                reply = AIMessage(
+                    content=assistant_message,
+                    additional_kwargs={"dialog_source": "proactive"},
+                )
                 if response_cancelled:
                     # Whoever cancelled it may already have appended its own
                     # user message; the half that was shown goes before it.

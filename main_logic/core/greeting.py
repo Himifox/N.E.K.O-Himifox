@@ -314,6 +314,12 @@ class GreetingMixin:
             try:
                 logger.info("[%s] handle_avatar_interaction: auto-starting text session", self.lanlan_name)
                 await self.start_session(self.websocket, new=False, input_mode='text')
+            except asyncio.CancelledError as exc:
+                if not self._consume_start_retirement_cancellation(exc):
+                    raise
+                logger.info("[%s] handle_avatar_interaction: auto start_session cancelled", self.lanlan_name)
+                await self.send_avatar_interaction_ack(interaction_id, False, "session_start_cancelled")
+                return {"accepted": False, "reason": "session_start_cancelled", "interaction_id": interaction_id}
             except Exception as e:
                 logger.warning("[%s] handle_avatar_interaction: auto start_session failed: %s", self.lanlan_name, e)
                 await self.send_avatar_interaction_ack(interaction_id, False, "session_start_failed")
@@ -602,6 +608,10 @@ class GreetingMixin:
             try:
                 logger.info("[%s] trigger_greeting: auto-starting text session", self.lanlan_name)
                 await self.start_session(ws, new=False, input_mode='text')
+            except asyncio.CancelledError as exc:
+                if not self._consume_start_retirement_cancellation(exc):
+                    raise
+                return
             except Exception as e:
                 logger.warning("[%s] trigger_greeting: auto start_session failed: %s", self.lanlan_name, e)
                 return
@@ -989,6 +999,10 @@ class GreetingMixin:
             try:
                 logger.info("[%s] trigger_cat_greeting: auto-starting text session", self.lanlan_name)
                 await self.start_session(ws, new=False, input_mode='text')
+            except asyncio.CancelledError as exc:
+                if not self._consume_start_retirement_cancellation(exc):
+                    raise
+                return
             except Exception as e:
                 logger.warning("[%s] trigger_cat_greeting: auto start_session failed: %s", self.lanlan_name, e)
                 return
@@ -1125,6 +1139,10 @@ class GreetingMixin:
             try:
                 logger.info("[%s] trigger_new_character_greeting: auto-starting text session", self.lanlan_name)
                 await self.start_session(self.websocket, new=False, input_mode='text')
+            except asyncio.CancelledError as exc:
+                if not self._consume_start_retirement_cancellation(exc):
+                    raise
+                return
             except Exception as e:
                 logger.warning("[%s] trigger_new_character_greeting: auto start_session failed: %s", self.lanlan_name, e)
                 return

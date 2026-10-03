@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from utils.screen_comment_guard import project_screen_history, strip_screen_labels
+
 from ._shared import (
     _answered_chunk,
     _generation_check,
@@ -70,12 +72,60 @@ class _ToolingMixin:
     def _dialog_messages_for_provider(self, messages):
         """Build the request view of ``messages``; the saved history is untouched.
 
-        Drops tool-call bookkeeping the provider would reject, on a copy: a
-        round that is still executing (or was cancelled mid-batch) sits in the
-        shared history while another turn builds its request, and an
-        ``assistant(tool_calls)`` without its tool replies is a 400.
+        Screen-comment chains in assistant history are cut back to their first
+        comment, without source labels (``utils.screen_comment_guard``). No
+        user wording restores the removed comments.
+
+        Only history up to the current turn's user message is projected. What
+        this turn added after it (text already streamed to the user with its
+        tool calls, tool results, tool images) is not cut, so the model sees
+        every comment it really said and does not repeat one; only the source
+        labels are removed from it. A retry re-sends those messages too.
+
+        Then tool-call bookkeeping the provider would reject is dropped, on a
+        copy: a round that is still executing (or was cancelled mid-batch)
+        sits in the shared history while another turn builds its request, and
+        an ``assistant(tool_calls)`` without its tool replies is a 400.
         """
-        return self._paired_tool_rounds(messages)
+        turn_start = next(
+            (index + 1 for index in range(len(messages) - 1, -1, -1)
+             if getattr(messages[index], "type", None) == "human"),
+            len(messages),
+        )
+        hits: dict = {}
+        if turn_start < len(messages):
+            head = messages[:turn_start]
+            projected_head = project_screen_history(head, hits=hits)
+            tail = messages[turn_start:]
+            projected_tail = strip_screen_labels(tail)
+            if projected_tail is not tail:
+                hits["label"] = hits.get("label", 0) + 1
+            projected = (
+                messages if projected_head is head and projected_tail is tail
+                else list(projected_head) + list(projected_tail)
+            )
+        else:
+            projected = project_screen_history(messages, hits=hits)
+        if projected is not messages:
+            # The history is re-projected on every provider call; log a
+            # rewrite once, not on every later request that repeats it.
+            kept = {id(message) for message in projected}
+            signature = tuple(id(message) for message in messages if id(message) not in kept)
+            log = (
+                logger.debug
+                if signature == getattr(self, "_screen_quarantine_signature", None)
+                else logger.info
+            )
+            self._screen_quarantine_signature = signature
+            log(
+                "OmniOfflineClient: screen-chain request view rewrote "
+                "%d message(s) with an in-message chain, %d in a cross-message run, "
+                "%d more for labels alone",
+                hits.get("message", 0),
+                hits.get("run", 0),
+                hits.get("label", 0),
+            )
+        return self._paired_tool_rounds(projected)
 
     @staticmethod
     def _paired_tool_rounds(messages):
@@ -1045,8 +1095,8 @@ class _ToolingMixin:
             tool_frames_published = False
             async for chunk in self._astream_declining_tools(
                 # Built here rather than inside the helper so both the first
-                # attempt and the retry-after-tools-refusal get the same
-                # repaired view.
+                # attempt and the retry-after-tools-refusal get the same view
+                # (screen-projected, tool rounds repaired).
                 self._dialog_messages_for_provider(messages),
                 overrides,
                 response_generation=response_generation,

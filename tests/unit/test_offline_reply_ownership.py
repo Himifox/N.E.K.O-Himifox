@@ -1834,3 +1834,25 @@ async def test_a_claimed_reply_is_closed_with_its_own_request_id(monkeypatch):
     await asyncio.wait_for(asyncio.gather(turn_a, *tasks), 5)
     assert [m.get("request_id") for m in _turn_ends(mgr)] == ["req-B"]
     assert notes == ["B的回复。"]
+
+
+async def test_a_deferred_typed_input_leaves_the_debt_to_its_replay():
+    """A typed input deferred back to the pending queue (its session is still
+    starting) has not been handled: the owed wrap-up stays owed until the
+    replay of that input settles it."""
+    from main_logic.core.session_records import INPUT_DISPATCH_DEFERRED
+
+    mgr = _make_manager()
+    mgr._turn_wrap_up_owed = True
+    mgr._settle_owed_turn_wrap_up = AsyncMock()
+    mgr._process_stream_data_internal = AsyncMock(return_value=INPUT_DISPATCH_DEFERRED)
+    message = {"input_type": "text", "data": "你好"}
+
+    result = await M._process_stream_input(mgr, message, on_dispatch_attempted=lambda: None)
+    assert result is INPUT_DISPATCH_DEFERRED
+    mgr._settle_owed_turn_wrap_up.assert_not_awaited()
+    assert getattr(mgr, "_reply_setup_depth", 0) == 0
+
+    mgr._process_stream_data_internal = AsyncMock(return_value=None)  # the replay
+    await M._process_stream_input(mgr, message, on_dispatch_attempted=lambda: None)
+    mgr._settle_owed_turn_wrap_up.assert_awaited_once()
