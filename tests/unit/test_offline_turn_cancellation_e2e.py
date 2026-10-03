@@ -1746,3 +1746,50 @@ async def test_a_proactive_reply_anchored_on_a_dropped_tool_round_stays_before_t
     shape = _history_shape(client)
     i_reply = next(i for i, s in enumerate(shape) if s[0] == "ai" and s[1] == "刚才看到")
     assert i_reply < shape.index(("human", "Q-new", None))
+
+
+_SPLIT_LONG = (
+    "one two three four five six seven eight nine ten, "
+    "eleven twelve thirteen fourteen fifteen sixteen seventeen."
+)
+
+
+def _summary_split_client():
+    client = _client()
+    client.enable_response_guard = True
+    client.enable_long_response_summary = True
+    client.max_response_length = 5
+    client.max_response_rerolls = 0
+    calls = []
+
+    async def on_text_delta(text, is_first=False, *, ui_enabled=True, tts_enabled=True):
+        calls.append((text, ui_enabled, tts_enabled))
+        if text.endswith(",") and client._active_response_generation is not None:
+            # A typed input interrupts during the first half of the split:
+            # the generation retires, the stream_text task runs on.
+            assert await client.handle_interruption()
+
+    async def summarize(**_kw):
+        return "SUMMARY"
+
+    client.on_text_delta = on_text_delta
+    client._summarize_tail_for_tts = summarize
+    return client, calls
+
+
+async def test_a_reply_cut_in_the_first_half_of_a_summary_split_sends_no_more():
+    client, calls = _summary_split_client()
+    client.script = [[_text("Hi! "), _text(_SPLIT_LONG), _text(" more tail text", "stop")]]
+    await client.stream_text("hello")
+    cut = next(i for i, c in enumerate(calls) if c[0].endswith(","))
+    assert calls[cut + 1:] == []
+
+
+async def test_a_reply_cut_in_the_flush_split_sends_no_tail_or_summary():
+    client, calls = _summary_split_client()
+    client._prefix_buffer_size = 10_000  # the whole reply goes through the flush
+    client.script = [[_text(_SPLIT_LONG, "stop")]]
+    await client.stream_text("hello")
+    assert len(calls) == 1 and calls[0][0].endswith(",")
+    shape = _history_shape(client)
+    assert shape[-1][0] == "ai" and shape[-1][1] == calls[0][0]

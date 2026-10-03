@@ -1338,8 +1338,16 @@ class _LifecycleMixin:
             await self.cancel_response()
         else:
             interrupted = self._claim_pending_completion()
-        if await self._cancel_external_voice_submit_task():
-            logger.info("Cancelling pending external voice submit")
+        try:
+            if await self._cancel_external_voice_submit_task():
+                logger.info("Cancelling pending external voice submit")
+        except asyncio.CancelledError as exc:
+            # Cancelled itself while waiting for the child task: the reply is
+            # taken over already, so whoever awaited this still has to close
+            # it (``interrupted_reply`` on the cancellation).
+            if interrupted:
+                exc.interrupted_reply = interrupted
+            raise
         return interrupted
 
     async def handle_messages(self) -> None:

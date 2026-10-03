@@ -1407,7 +1407,8 @@ class _StreamingMixin:
                                 # 三家口径一致。然后再重置 state 让 post-tool 重新
                                 # 走 idle 起点。
                                 if (
-                                    not _round_cancelled
+                                    # Re-read: the residual send above may have cut it.
+                                    self._active_response_generation == response_generation
                                     and summary_mode_enabled
                                     and summary_state == 'cutover_done'
                                     and summary_tail_buffer
@@ -1575,7 +1576,9 @@ class _StreamingMixin:
                                                         "(prefix_chars=%d, trigger=%d tokens)",
                                                         len(assistant_message), summary_trigger_tokens,
                                                     )
-                                                    if post:
+                                                    # The await before it may have cut the reply:
+                                                    # its remaining half is never shown.
+                                                    if post and self._active_response_generation == response_generation:
                                                         assistant_message += post
                                                         assistant_message_total += post
                                                         summary_tail_buffer += post
@@ -1771,7 +1774,9 @@ class _StreamingMixin:
                                                         "(prefix_chars=%d, trigger=%d tokens)",
                                                         len(assistant_message), summary_trigger_tokens,
                                                     )
-                                                    if post:
+                                                    # The await before it may have cut the reply:
+                                                    # its remaining half is never shown.
+                                                    if post and self._active_response_generation == response_generation:
                                                         assistant_message += post
                                                         assistant_message_total += post
                                                         summary_tail_buffer += post
@@ -1803,6 +1808,18 @@ class _StreamingMixin:
                                             if self.on_text_delta:
                                                 await self.on_text_delta(emit_flush_text, is_first_chunk)
                                             is_first_chunk = False
+
+                        # The flush's sends are cancellation points too: a reply
+                        # cut there sends no tail or summary under the turn
+                        # that cut it, and keeps what was shown, like the check
+                        # before the flush.
+                        if self._active_response_generation != response_generation:
+                            cut_keeps_shown = False
+                            self._commit_cancelled_reply(
+                                user_message, AIMessage(content=assistant_message),
+                                response_generation, turn_history=turn_history,
+                            )
+                            break
 
                         if guard_triggered:
                             # Every way out of here either commits the

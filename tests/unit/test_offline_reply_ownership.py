@@ -2367,3 +2367,34 @@ async def test_a_deferred_typed_input_leaves_the_debt_to_its_replay():
     mgr._process_stream_data_internal = AsyncMock(return_value=None)  # the replay
     await M._process_stream_input(mgr, message, on_dispatch_attempted=lambda: None)
     mgr._settle_owed_turn_wrap_up.assert_awaited_once()
+
+
+@pytest.mark.parametrize("cancel_interrupter", [False, True])
+async def test_an_interrupter_cancelled_in_its_own_wait_still_closes_the_reply(
+    monkeypatch, cancel_interrupter,
+):
+    """The interrupter (e.g. the ASR detector worker preparing a voice turn)
+    is cancelled while it waits for the reply's task: the reply was taken
+    over already and skipped its own completion, so the interrupter still
+    closes it: one turn end, the half it said noted as its own AI turn, the
+    wrap-up owed."""
+    session, mgr, notes = _wire_text_path(monkeypatch)
+    voice, streaming = _voice_reply(
+        session, _text("语音说到一半，"), "park", _text("后半句。"), _text("", "stop"),
+    )
+    await asyncio.wait_for(streaming.wait(), 5)
+    interrupter = asyncio.ensure_future(mgr._interrupt_offline_reply(session))
+    await asyncio.sleep(0)
+    if cancel_interrupter:
+        interrupter.cancel()
+    result = (await asyncio.gather(interrupter, return_exceptions=True))[0]
+    await asyncio.gather(voice, return_exceptions=True)
+    await _drain()
+    if cancel_interrupter:
+        assert isinstance(result, asyncio.CancelledError)
+    else:
+        assert result is True
+    assert _turn_ends(mgr) == [{"type": "system", "data": "turn end"}]
+    assert mgr._current_ai_turn_text == ""
+    assert mgr._turn_wrap_up_owed is True
+    assert notes == ["语音说到一半，"]  # the half it said, as its own AI turn
