@@ -2434,3 +2434,40 @@ async def test_a_cancelled_interrupter_sends_the_notice_before_its_cancellation_
     assert isinstance(result, asyncio.CancelledError)
     assert _system(mgr) == [{"type": "system", "data": "turn abandoned", "request_id": "req-A"}]
     await asyncio.gather(voice, return_exceptions=True)
+
+
+async def test_a_cancelled_interrupter_drops_a_notice_its_send_cannot_deliver(monkeypatch):
+    """A WebSocket send that never completes (a slow or stuck connection)
+    does not hold the cancellation up for long: whoever cancelled the
+    interrupter (AsrDetectorDispatcher.close()) waits for it. The notice is
+    dropped, never sent late."""
+    import main_logic.core.turn as turn_module
+    from main_logic.core._shared import _ReplyTurn
+
+    monkeypatch.setattr(turn_module, "_TAKEN_OVER_NOTICE_ON_CANCEL_TIMEOUT_S", 0.05)
+    session, mgr, _notes = _wire_text_path(monkeypatch)
+    voice, streaming = _voice_reply(
+        session, _text("说到一半，"), "park", _text("后半句。"), _text("", "stop"),
+    )
+    await asyncio.wait_for(streaming.wait(), 5)
+    session._active_reply_owner = _ReplyTurn(speech_id="sid-A", request_id="req-A")
+    mgr._active_text_request_id = "req-A"
+    stuck = asyncio.Event()
+    real_send = mgr.websocket.send_json
+
+    async def send_json(payload):
+        if payload.get("data") == "turn abandoned":
+            await stuck.wait()
+        await real_send(payload)
+
+    mgr.websocket.send_json = send_json
+    interrupter = asyncio.ensure_future(mgr._interrupt_offline_reply(session))
+    await asyncio.sleep(0)
+    interrupter.cancel()
+    result = (await asyncio.wait_for(asyncio.gather(interrupter, return_exceptions=True), 2))[0]
+    assert isinstance(result, asyncio.CancelledError)
+    stuck.set()
+    await _drain()
+    assert _system(mgr) == []
+    assert _turn_ends(mgr) == [{"type": "system", "data": "turn end", "request_id": "req-A"}]
+    await asyncio.gather(voice, return_exceptions=True)

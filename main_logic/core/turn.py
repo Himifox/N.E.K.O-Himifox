@@ -41,6 +41,7 @@ from ._shared import (
     _ReplyTurn,
     _taken_over_reply_turn,
     _MAGIC_COMMAND_IMAGE_DROP_REQUEST_MAX,
+    _TAKEN_OVER_NOTICE_ON_CANCEL_TIMEOUT_S,
     _VOICE_ECHO_LOOKBACK_SECONDS,
     _VOICE_ECHO_LOOKBACK_CHARS,
     _looks_like_recent_ai_echo,
@@ -365,16 +366,26 @@ class TurnMixin:
             # reply's task (an ASR detector worker closed on an error or a
             # restart): the reply is taken over all the same, so close it now,
             # and send its frontend notice before the cancellation goes on, as
-            # below, so it lands before any newer reply. The sends are best
-            # effort and raise nothing; a second cancellation only cuts one
-            # short.
+            # below, so it lands before any newer reply. Bounded, since
+            # whoever cancelled this may be waiting for it: a notice not sent
+            # by then is dropped, never sent late. The sends are best effort
+            # and raise nothing; a second cancellation only cuts one short.
             taken_over = getattr(exc, "interrupted_reply", None)
             if taken_over:
                 frontend_send = self._close_taken_over_offline_reply(
                     taken_over, displaced=False,
                 )
                 if frontend_send is not None:
-                    await frontend_send()
+                    try:
+                        await asyncio.wait_for(
+                            frontend_send(), _TAKEN_OVER_NOTICE_ON_CANCEL_TIMEOUT_S,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "[%s] notice for a reply taken over by a cancelled "
+                            "interruption not sent in time; dropped",
+                            self.lanlan_name,
+                        )
             raise
         if not kind:
             return False
