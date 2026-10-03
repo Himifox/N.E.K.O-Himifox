@@ -2757,3 +2757,38 @@ async def test_a_takeover_in_the_discards_tts_cleanup_still_tells_the_frontend(m
     assert facts["interrupted"] is True
     assert "response_discarded_clear" in sync
     assert "response_discarded" in ws_types
+
+
+async def test_a_discard_taken_over_in_its_frontend_notice_leaves_the_tts_pipeline_alone(
+    monkeypatch,
+):
+    """The takeover lands in the WebSocket send of ``response_discarded``:
+    the taker may already be feeding the TTS pipeline, so the discard no
+    longer clears it (the taker clears what was left there itself)."""
+    session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, "req-A")
+    facts, release, holder = {}, asyncio.Event(), {}
+    setup, interrupted = _held_typed_input(mgr, session, facts, release)
+    clears = []
+    real_clear = mgr._clear_tts_pipeline
+
+    async def clear():
+        clears.append("taken_over" in holder)
+        await real_clear()
+
+    mgr._clear_tts_pipeline = clear
+    real_send_json = mgr.websocket.send_json
+
+    async def send_json(payload):
+        if payload.get("type") == "response_discarded" and "task" not in holder:
+            holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
+            await interrupted.wait()
+            holder["taken_over"] = True
+        await real_send_json(payload)
+
+    mgr.websocket.send_json = send_json
+    await _drive_final_discard(session, mgr, reply_turn, "req-A")
+    release.set()
+    await holder["task"]
+    await _drain()
+    assert facts["interrupted"] is True
+    assert True not in clears, "no TTS clear after the takeover"

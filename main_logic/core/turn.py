@@ -1231,7 +1231,10 @@ class TurnMixin:
             except Exception as e:
                 logger.warning(f"发送 response_discarded 到前端失败: {e}")
 
-        if owns_shared_output:
+        # Rechecked: the frontend send above is an await, and a reply that took
+        # this one over in it may already be feeding the TTS pipeline (the
+        # taker clears what this reply left there itself).
+        if owns_shared_output and may_clear_shared_output():
             await self._clear_tts_pipeline()
 
         # RESPONSE_TOO_LONG 最终丢弃时：发送可爱回复 + 用角色 TTS 音色念出来。
