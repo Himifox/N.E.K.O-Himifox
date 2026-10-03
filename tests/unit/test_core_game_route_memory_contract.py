@@ -237,15 +237,18 @@ def test_clean_frontend_memory_text_strips_c0_and_c1_controls():
 
 
 def _spy_discard_tts_clear(mgr):
-    """A discard clears TTS in two halves (``_interrupt_tts_now`` before its
-    frontend notice, ``_finish_tts_clear`` after), not via
-    ``_clear_tts_pipeline``: spy on both."""
+    """A discard clears TTS in steps (``_interrupt_tts_now`` and
+    ``_let_tts_interrupt_land`` before its frontend notice,
+    ``_finish_tts_clear`` after), not via ``_clear_tts_pipeline``: spy on
+    them."""
     mgr._interrupt_tts_now = Mock(return_value="tts-interrupt")
+    mgr._let_tts_interrupt_land = AsyncMock()
     mgr._finish_tts_clear = AsyncMock()
 
 
 def _assert_discard_left_tts_alone(mgr):
     mgr._interrupt_tts_now.assert_not_called()
+    mgr._let_tts_interrupt_land.assert_not_awaited()
     mgr._finish_tts_clear.assert_not_awaited()
 
 
@@ -3005,6 +3008,7 @@ async def test_unowned_discard_callback_keeps_global_clear_behavior():
     )
 
     mgr._interrupt_tts_now.assert_called_once_with()
+    mgr._let_tts_interrupt_land.assert_awaited_once()
     mgr._finish_tts_clear.assert_awaited_once_with("tts-interrupt")
     assert {
         "type": "system",

@@ -1191,12 +1191,15 @@ class TtsRuntimeMixin:
         The two TTS-done flags are NOT reset together, because they are not
         paired with the same thing — see the comments at each reset.
 
-        Two halves, for a caller that must tell the frontend between them (a
+        Three steps, for a caller that must tell the frontend in between (a
         final discard: no audio of the discarded reply may arrive after its
-        notice): ``_interrupt_tts_now`` (synchronous) and
-        ``_finish_tts_clear``.
+        notice): ``_interrupt_tts_now`` (synchronous),
+        ``_let_tts_interrupt_land`` (audio a handler already held goes out,
+        what leaked meanwhile is dropped) and ``_finish_tts_clear``.
         """
-        await self._finish_tts_clear(self._interrupt_tts_now())
+        interrupt = self._interrupt_tts_now()
+        await self._let_tts_interrupt_land(interrupt)
+        await self._finish_tts_clear(interrupt)
 
     @staticmethod
     def _drain_tts_responses(response_queue) -> None:
@@ -1268,18 +1271,30 @@ class TtsRuntimeMixin:
             interrupted = True
         return runtime, response_queue, pending_chunks, session, speech_id, interrupted
 
+    async def _let_tts_interrupt_land(self, interrupt, still_owned=None) -> None:
+        """Wait for an interrupt from ``_interrupt_tts_now`` to land, then drop
+        the audio the old synthesizer leaked meanwhile.
+
+        A response handler that had already taken an audio item off the queue
+        sends it in this wait, so it reaches the frontend ahead of anything
+        sent after this returns. ``still_owned``, when given, is rechecked
+        before the drop: a caller taken over in the wait leaves the queue to
+        its taker.
+        """
+        if interrupt is None or not interrupt[-1]:
+            return
+        # 等待 TTS worker 处理 __interrupt__ 并 mute 回调（worker 轮询间隔 ~10ms）
+        # 然后再次清空响应队列，确保旧 synthesizer 泄漏的音频全部丢弃
+        await asyncio.sleep(0.02)
+        if still_owned is None or still_owned():
+            self._drain_tts_responses(interrupt[1])
+
     async def _finish_tts_clear(self, interrupt) -> None:
-        """The second half of ``_clear_tts_pipeline``, given what
-        ``_interrupt_tts_now`` returned: drop what the old synthesizer still
-        leaked, then the pending caches."""
+        """The last step of ``_clear_tts_pipeline``, given what
+        ``_interrupt_tts_now`` returned: the pending caches."""
         if interrupt is None:
             return
-        runtime, response_queue, pending_chunks, session, speech_id, interrupted = interrupt
-        if interrupted:
-            # 等待 TTS worker 处理 __interrupt__ 并 mute 回调（worker 轮询间隔 ~10ms）
-            # 然后再次清空响应队列，确保旧 synthesizer 泄漏的音频全部丢弃
-            await asyncio.sleep(0.02)
-            self._drain_tts_responses(response_queue)
+        runtime, response_queue, pending_chunks, session, speech_id, _interrupted = interrupt
         async with self.tts_cache_lock:
             owns_queues = (runtime is getattr(self, "_tts_runtime", None)
                            and response_queue is self.tts_response_queue)

@@ -1196,10 +1196,12 @@ class TurnMixin:
         #
         # 前端的 response_discarded 是同一份共享输出的另一半：用同一个产权
         # 快照、赶在 TTS 清理的 await 之前发。否则接管落在那次 await 里时，
-        # cross_server 已经丢掉了这段文本，前端气泡却还留着它。TTS 清理拆成
-        # 两段：同步的中断（worker 收到 __interrupt__、已排队的旧音频丢掉）
-        # 在通知之前，让被丢弃回复的音频不会在通知之后才到前端；需要 await
-        # 的收尾在通知之后，且重新确认产权（接管方会自己做完整清理）。
+        # cross_server 已经丢掉了这段文本，前端气泡却还留着它。TTS 清理拆开：
+        # 中断（worker 收到 __interrupt__、已排队的旧音频丢掉）和等它落地
+        # （handler 手里已取出的那段音频在这期间发出、泄漏的再丢一次）都在
+        # 通知之前，让被丢弃回复的音频不会在通知之后才到前端；加锁的收尾在
+        # 通知之后。这几步之间每次 await 后都重新确认产权，接管方会自己做
+        # 完整清理。
         owns_shared_output = may_clear_shared_output()
         tts_interrupt = None
         if owns_shared_output:
@@ -1215,6 +1217,9 @@ class TurnMixin:
                     'data': 'response_discarded_clear'
                 })
             tts_interrupt = self._interrupt_tts_now()
+            await self._let_tts_interrupt_land(
+                tts_interrupt, still_owned=may_clear_shared_output,
+            )
 
         # A request-bound discard is only relevant while that request still owns
         # the shared response. Emitting a stale A notification after B becomes

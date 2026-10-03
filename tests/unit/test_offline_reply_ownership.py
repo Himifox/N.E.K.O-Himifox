@@ -2665,15 +2665,15 @@ async def test_a_recovery_without_request_id_taken_over_before_its_loop_sends_no
     session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, None)
     facts, release, holder = {}, asyncio.Event(), {}
     setup, interrupted = _held_typed_input(mgr, session, facts, release)
-    real_finish = mgr._finish_tts_clear
+    real_land = mgr._let_tts_interrupt_land
 
-    async def finish(interrupt):
+    async def land(interrupt, still_owned=None):
         if "task" not in holder:
             holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
             await interrupted.wait()
-        await real_finish(interrupt)
+        await real_land(interrupt, still_owned)
 
-    mgr._finish_tts_clear = finish
+    mgr._let_tts_interrupt_land = land
     await _drive_final_discard(session, mgr, reply_turn, None)
     after = [(m.get("type"), m.get("data")) for m in mgr.websocket.sent[facts["ws_mark"]:]]
     release.set()
@@ -2733,21 +2733,21 @@ async def test_a_recovery_taken_over_in_its_body_send_still_keeps_the_body_in_hi
 
 
 async def test_a_takeover_in_the_discards_tts_cleanup_still_tells_the_frontend(monkeypatch):
-    """The takeover lands in the discard's TTS cleanup await (its finishing
-    half): cross_server has already dropped the text, so the frontend gets
-    its ``response_discarded`` too, sent before that await."""
+    """The takeover lands in the discard's TTS cleanup await (waiting for
+    the interrupt to land): cross_server has already dropped the text, so
+    the frontend gets its ``response_discarded`` too."""
     session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, "req-A")
     facts, release, holder = {}, asyncio.Event(), {}
     setup, interrupted = _held_typed_input(mgr, session, facts, release)
-    real_finish = mgr._finish_tts_clear
+    real_land = mgr._let_tts_interrupt_land
 
-    async def finish(interrupt):
+    async def land(interrupt, still_owned=None):
         if "task" not in holder:
             holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
             await interrupted.wait()
-        await real_finish(interrupt)
+        await real_land(interrupt, still_owned)
 
-    mgr._finish_tts_clear = finish
+    mgr._let_tts_interrupt_land = land
     await _drive_final_discard(session, mgr, reply_turn, "req-A")
     release.set()
     await holder["task"]
@@ -2827,3 +2827,38 @@ async def test_a_final_discard_interrupts_tts_before_telling_the_frontend(monkey
     await _drain()
     assert ("__interrupt__", None) in seen["requests"]
     assert ("__audio__", old_sid, b"old-audio") not in seen["responses"]
+
+
+async def test_audio_a_handler_already_held_goes_out_before_the_discard_notice(monkeypatch):
+    """The TTS response handler had already taken an audio item off the
+    queue when the discard interrupted the worker, so draining cannot take
+    it back: the discard lets it go out before telling the frontend, or it
+    would play after the frontend cleared its audio."""
+    import queue
+
+    class _AliveThread:
+        def is_alive(self):
+            return True
+
+    session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, "req-A")
+    mgr.tts_thread = _AliveThread()
+    mgr.tts_request_queue = queue.Queue()
+    mgr.tts_response_queue = queue.Queue()
+    mgr.tts_pending_chunks = []
+    mgr.tts_cache_lock = asyncio.Lock()
+    real_interrupt = mgr._interrupt_tts_now
+
+    def interrupt_with_audio_in_hand():
+        result = real_interrupt()
+        # The handler resumes with its item on the next loop turns.
+        loop = asyncio.get_running_loop()
+        loop.call_soon(lambda: asyncio.ensure_future(
+            mgr.websocket.send_json({"type": "audio_in_hand"})
+        ))
+        return result
+
+    mgr._interrupt_tts_now = interrupt_with_audio_in_hand
+    await _drive_final_discard(session, mgr, reply_turn, "req-A")
+    await _drain()
+    types = [m.get("type") for m in mgr.websocket.sent]
+    assert types.index("audio_in_hand") < types.index("response_discarded")
