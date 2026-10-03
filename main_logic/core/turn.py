@@ -1233,10 +1233,13 @@ class TurnMixin:
             and may_clear_shared_output()
         )
         if recovery_owns_shared_state:
-            # The recovered body goes to cross_server untracked (see
-            # _track_recovery_ai_turn_text): an interruption cutting the steps
-            # below must still end that turn there.
-            self._discarded_turn_open = True
+            def _mark_recovery_published(_published_at) -> None:
+                # The recovered body went to cross_server untracked (see
+                # _track_recovery_ai_turn_text): from here an interruption
+                # cutting the steps below must still end that turn there. Not
+                # before: a body cut before it was published opened nothing.
+                self._discarded_turn_open = True
+
             try:
                 if _truncated_text is not None:
                     body_text = _truncated_text
@@ -1303,6 +1306,8 @@ class TurnMixin:
                         turn_id=recovery_turn_id,
                         request_id=active_request_id,
                         track_ai_turn=False,
+                        on_published=_mark_recovery_published,
+                        publish_if=may_clear_shared_output,
                     ),
                     _append_recovery_history,
                 ]
@@ -2223,8 +2228,14 @@ class TurnMixin:
         expected_speech_id: str | None = None,
         expected_user_engagement_time: Any = Ellipsis,
         on_published: Callable[[float], None] | None = None,
+        publish_if: Callable[[], bool] | None = None,
     ):
         """Qwen output transcription callback: usable for frontend display/cache/sync.
+
+        ``publish_if``, when given, is rechecked with the other guards at the
+        publish boundary (after the Focus cleanup await): a caller whose turn
+        can be taken over in that await (the discard recovery) publishes
+        nothing once it no longer owns the shared output.
 
         ``request_id`` is tri-state:
           - not passed (i.e. the default ``_REQUEST_ID_UNSET``) → falls back to the
@@ -2243,6 +2254,8 @@ class TurnMixin:
         ``request_id is None`` check.
         """
         def guarded_delivery_is_current() -> bool:
+            if publish_if is not None and not publish_if():
+                return False
             if (
                 expected_speech_id is not None
                 and self.current_speech_id != expected_speech_id

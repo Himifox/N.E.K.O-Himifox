@@ -2514,7 +2514,57 @@ async def test_a_recovery_taken_over_neither_ends_its_turn_again_nor_finalizes_i
     typed input's hold: finalized once, after the hold."""
     facts = await _recovery_cut_by_a_typed_input(monkeypatch, request_id)
     assert facts["interrupted"] is True
-    assert len(facts["turn_ends"]) == 1
+    # Cut before its body was published: with a request id the recovery
+    # stops there (nothing reached cross_server, nothing to end); with none
+    # it cannot tell it lost the output and ends its own turn, once.
+    assert len(facts["turn_ends"]) == (1 if request_id is None else 0)
     assert facts["finalized_inside_the_hold"] == []
     assert facts["finalize_depths"] == [0]
     assert facts["owed"] is False
+
+
+async def test_a_recovery_cut_before_its_body_is_published_sends_no_empty_turn_end():
+    """Nothing was published before the final discard, and the recovery is
+    interrupted while ``send_lanlan_response`` still awaits its Focus
+    cleanup: no body has reached cross_server yet, so the takeover queues no
+    empty turn end there (it would re-trigger analysis and eat the turn's
+    meta), and the recovery, no longer owning the output, publishes none."""
+    mgr = _make_manager()
+    mgr.is_active = True
+    mgr.websocket = _FakeConnectedWebSocket()
+    mgr._finalize_turn_after_emit = AsyncMock()
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._open_reply_turn = None
+    mgr.use_tts = False
+    mgr._clear_tts_pipeline = AsyncMock()
+    session = MagicMock(_conversation_history=[])
+    mgr.session = session
+    reply_turn = mgr._begin_reply_turn(speech_id=mgr.current_speech_id, request_id="req-A")
+    reply_turn.session = session
+    session.handle_interruption = AsyncMock(
+        return_value=InterruptedReply("response", owner=reply_turn))
+    mgr._active_text_request_id = "req-A"
+    mgr._discarded_turn_open = False
+    mgr.send_lanlan_response = M.send_lanlan_response.__get__(mgr)
+    cuts = []
+
+    async def focus_cleanup(active):
+        # The first chunk's Focus cleanup, right before the publish.
+        if active is False and not cuts:
+            cuts.append(await mgr._interrupt_offline_reply(session))
+
+    mgr._push_focus_thinking = focus_cleanup
+    await mgr.handle_response_discarded(
+        "length_truncated", 1, 1, False,
+        '{"code": "RESPONSE_LENGTH_TRUNCATED", "text": "截断到这里。"}',
+        request_id="req-A",
+        reply_turn=reply_turn,
+    )
+    assert cuts == [True]
+    turn_ends = [i for i, m in enumerate(mgr.sync_message_queue.messages)
+                 if m.get("data") == "turn end"]
+    bodies = [i for i, m in enumerate(mgr.sync_message_queue.messages)
+              if m.get("type") == "json"]
+    # Taken over in that await, the recovery publishes no body either.
+    assert bodies == [] and turn_ends == []
+    assert mgr._discarded_turn_open is False
