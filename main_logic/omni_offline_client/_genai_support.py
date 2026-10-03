@@ -396,6 +396,7 @@ class _GenaiMixin:
         tool_image_slots = overrides.pop("_tool_image_slots", None)
         tool_bus_frames = overrides.pop("_tool_bus_frames", None)
         tool_frames_turn_id = overrides.pop("_tool_frames_turn_id", None)
+        tool_rounds = overrides.pop("_tool_rounds", None)
         response_generation = overrides.pop("_response_generation", None)
 
         generation_is_active = _generation_check(self, response_generation)
@@ -762,6 +763,7 @@ class _GenaiMixin:
                     tool_bus_frames=tool_bus_frames,
                     generation_is_active=generation_is_active,
                     log_prefix="OmniOfflineClient(genai)",
+                    tool_rounds=tool_rounds,
                 )
                 executed_tool_calls += executed
                 if not live:

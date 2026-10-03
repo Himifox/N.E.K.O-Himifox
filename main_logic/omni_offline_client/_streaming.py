@@ -324,9 +324,10 @@ class _StreamingMixin:
         A turn that began after the cancellation may already have saved its
         user message or a proactive reply, so the reply goes where this turn
         ends (``_cancelled_turn_end``) instead of at the end. Tool-round
-        messages are dicts and belong to this turn. An anchor that is gone
-        (history rebuilt) falls back to appending, and an empty reply is
-        never written: some providers reject an empty assistant message.
+        messages are dicts and end no turn: a round starts none, and stepping
+        over it keeps it next to its replies. An anchor that is gone (history
+        rebuilt) falls back to appending, and an empty reply is never
+        written: some providers reject an empty assistant message.
         """
         if not str(getattr(reply, "content", "") or "").strip():
             return
@@ -356,52 +357,55 @@ class _StreamingMixin:
             self._conversation_history.append(AIMessage(content=text))
         return True
 
-    def _trim_cancelled_round_text(self, anchor, shown: str, generation: int) -> None:
+    def _trim_cancelled_round_text(self, shown: str, rounds) -> None:
         """Make a kept, cancelled tool round hold only the text that was shown.
 
         The tool loop writes its own stream buffer into the round, which also
         holds what this turn deliberately withheld (the name-prefix buffer, a
         think residual, a summary tail). A cancelled turn never emits that,
-        so the next request must not see it either.
+        so the next request must not see it either. ``rounds`` are this
+        turn's own rounds (see ``_last_tool_round_of``).
         """
-        kept = self._last_tool_round_of(anchor, generation)
+        kept = self._last_tool_round_of(rounds)
         if kept is not None:
             kept["content"] = shown
 
-    def _last_tool_round_of(self, anchor, generation: int):
-        """The last tool round (assistant ``tool_calls`` turn) kept in history
-        for the turn that owns ``anchor`` and streamed under ``generation``;
-        None if it has none, or ``anchor`` is gone."""
-        history = self._conversation_history
-        start = _find_by_identity(history, -1, anchor)
-        if start < 0:
+    def _last_tool_round_of(self, rounds):
+        """The tool round (assistant ``tool_calls`` turn) this turn appended
+        last, while it is still in history; None if it has none or that round
+        is gone.
+
+        ``rounds`` lists, in order, the assistant turns this turn's tool loop
+        appended (``_run_tool_round``). They are matched by identity, never by
+        position: a reply still live in this turn's setup window can reach
+        its tool round after this turn's user message was saved, and this
+        turn's own round can follow the user message of a turn whose setup
+        window it ran in. A round that left history (no call ran, or it went
+        with its turn) is not looked for elsewhere: an earlier round never
+        held the text shown after it.
+        """
+        if not rounds:
             return None
-        # This turn ends where _commit_cancelled_reply puts its reply; past
-        # that is a later turn, whose tool rounds must not be touched.
-        kept = None
-        for message in history[start + 1:_cancelled_turn_end(history, start, generation)]:
-            if (
-                isinstance(message, dict)
-                and message.get("role") == "assistant"
-                and message.get("tool_calls")
-            ):
-                kept = message
-        return kept
+        latest = rounds[-1]
+        if _find_by_identity(self._conversation_history, -1, latest) < 0:
+            return None
+        return latest
 
     def _keep_shown_text_of_cut_stream(
-        self, anchor, shown: str, segment_round, generation: int,
+        self, anchor, shown: str, segment_round, generation: int, rounds,
     ) -> None:
         """Keep what a reply had shown when its task was cancelled mid-stream.
 
         A cancelled task never reaches the check after ``stream_text``'s
         stream loop, so this does what that check, or the tool round
         sentinel before it, would have done with ``shown`` (the text shown
-        since the last persisted tool round). A tool round kept after
-        ``segment_round`` (the one the last sentinel reported) already holds
-        that text, its sentinel lost to the cancellation: it is trimmed to
-        it. Otherwise the text is committed as a cancelled reply, in order.
+        since the last persisted tool round). A round of this turn's own
+        ``rounds`` kept after ``segment_round`` (the one the last sentinel
+        reported) already holds that text, its sentinel lost to the
+        cancellation: it is trimmed to it. Otherwise the text is committed as
+        a cancelled reply, in order.
         """
-        kept = self._last_tool_round_of(anchor, generation)
+        kept = self._last_tool_round_of(rounds)
         if kept is not None and kept is not segment_round:
             kept["content"] = shown
             return
@@ -1114,6 +1118,9 @@ class _StreamingMixin:
         # 同一个理由，另一半：暂存待抄送的工具帧也必须跨 attempt 存活，否则
         # 重试成功的那轮"模型看到了、插件读不到"。
         _turn_tool_bus_frames: list = []
+        # The tool rounds this turn appended, across attempts, so a cancelled
+        # turn trims only its own (``_last_tool_round_of``).
+        _turn_tool_rounds: list = []
         try:
             # A displaced reply's frontend notice goes out before this reply
             # sends anything (see _begin_response_generation).
@@ -1268,6 +1275,7 @@ class _StreamingMixin:
                             self._conversation_history,
                             _tool_image_slots=_turn_tool_image_slots,
                             _tool_bus_frames=_turn_tool_bus_frames,
+                            _tool_rounds=_turn_tool_rounds,
                             _response_generation=response_generation,
                             **_focus_overrides,
                         ):
@@ -1325,12 +1333,12 @@ class _StreamingMixin:
                                 )
                                 if _round_cancelled:
                                     self._trim_cancelled_round_text(
-                                        user_message, assistant_message, response_generation,
+                                        assistant_message, _turn_tool_rounds,
                                     )
                                 length_guard_persisted_prefix = assistant_message_total
                                 assistant_message = ""
                                 segment_round = self._last_tool_round_of(
-                                    user_message, response_generation,
+                                    _turn_tool_rounds,
                                 )
                                 # 重置围栏 / prefix buffer：下一段是新的语义
                                 # 单元（模型基于 tool 结果重新出文本），不应
@@ -2194,7 +2202,7 @@ class _StreamingMixin:
             if cut_keeps_shown:
                 self._keep_shown_text_of_cut_stream(
                     user_message, assistant_message, segment_round,
-                    response_generation,
+                    response_generation, _turn_tool_rounds,
                 )
             raise
         finally:

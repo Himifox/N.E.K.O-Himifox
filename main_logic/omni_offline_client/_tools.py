@@ -378,6 +378,7 @@ class _ToolingMixin:
         tool_image_slots=None,
         tool_bus_frames=None,
         generation_is_active=lambda: True,
+        tool_rounds=None,
     ) -> int:
         """Run each tool call through ``on_tool_call`` and mutate
         ``messages`` in place: append one assistant turn announcing all
@@ -461,6 +462,7 @@ class _ToolingMixin:
             tool_bus_frames=tool_bus_frames,
             generation_is_active=generation_is_active,
             log_prefix="OmniOfflineClient",
+            tool_rounds=tool_rounds,
         )
         return executed
 
@@ -474,6 +476,7 @@ class _ToolingMixin:
         tool_bus_frames,
         generation_is_active,
         log_prefix: str,
+        tool_rounds=None,
     ):
         """Execute one tool round for either provider path.
 
@@ -491,8 +494,13 @@ class _ToolingMixin:
         Returns ``(calls executed, finished while live)``. A cancelled round
         keeps those calls in history unless its assistant turn left the
         history meanwhile (``_settle_unfinished_tool_round``).
+
+        ``tool_rounds``, when the caller passes one, gets ``assistant_turn``
+        as it is appended: the caller's own rounds, found by identity.
         """
         messages.append(assistant_turn)
+        if tool_rounds is not None:
+            tool_rounds.append(assistant_turn)
         tool_results: list = []
         image_results: list = []
         round_complete = False
@@ -894,6 +902,7 @@ class _ToolingMixin:
         tool_image_slots = overrides.pop("_tool_image_slots", None)
         tool_bus_frames = overrides.pop("_tool_bus_frames", None)
         tool_frames_turn_id = overrides.pop("_tool_frames_turn_id", None)
+        tool_rounds = overrides.pop("_tool_rounds", None)
         response_generation = overrides.pop("_response_generation", None)
         if self._use_genai_sdk and not self._genai_tools_unsupported:
             # 跟踪本轮 Gemini 路径是否已经把 text chunk yield 给上游。如果
@@ -910,6 +919,7 @@ class _ToolingMixin:
                     _tool_image_slots=tool_image_slots,
                     _tool_bus_frames=tool_bus_frames,
                     _tool_frames_turn_id=tool_frames_turn_id,
+                    _tool_rounds=tool_rounds,
                     _response_generation=response_generation,
                     **overrides,
                 ):
@@ -950,6 +960,7 @@ class _ToolingMixin:
             _tool_image_slots=tool_image_slots,
             _tool_bus_frames=tool_bus_frames,
             _tool_frames_turn_id=tool_frames_turn_id,
+            _tool_rounds=tool_rounds,
             _response_generation=response_generation,
             **overrides,
         ):
@@ -1061,6 +1072,7 @@ class _ToolingMixin:
         tool_image_slots = overrides.pop("_tool_image_slots", None)
         tool_bus_frames = overrides.pop("_tool_bus_frames", None)
         tool_frames_turn_id = overrides.pop("_tool_frames_turn_id", None)
+        tool_rounds = overrides.pop("_tool_rounds", None)
         response_generation = overrides.pop("_response_generation", None)
 
         generation_is_active = _generation_check(self, response_generation)
@@ -1241,6 +1253,7 @@ class _ToolingMixin:
                     tool_image_slots=tool_image_slots,
                     tool_bus_frames=tool_bus_frames,
                     generation_is_active=generation_is_active,
+                    tool_rounds=tool_rounds,
                 )
                 if not generation_is_active():
                     # Calls that ran before the cancellation stay in history

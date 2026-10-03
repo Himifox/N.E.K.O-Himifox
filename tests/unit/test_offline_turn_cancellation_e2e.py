@@ -663,10 +663,25 @@ async def test_a_kept_cancelled_round_holds_only_the_text_that_was_shown():
     ]
 
 
-async def test_trimming_a_cancelled_round_never_touches_the_interrupters_round():
+def _round_texts(client):
+    return {m["tool_calls"][0]["id"]: m["content"] for m in client._conversation_history
+            if isinstance(m, dict) and m.get("tool_calls")}
+
+
+async def _until(condition):
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("never reached")
+
+
+@pytest.mark.parametrize("later", ["typed", "callback"])
+async def test_trimming_a_cancelled_round_never_touches_the_interrupters_round(later):
     """A is cancelled inside a slow tool; B runs its own tool round and
-    finishes before A's handler returns. Trimming A's kept round must stop
-    at B's user message and leave B's round alone."""
+    finishes before A's handler returns. Trimming A's kept round touches A's
+    round only. A callback reply (``prompt_ephemeral``) runs its tool loop
+    on a copy of the history: only its reply is saved, and it stays as is."""
     release = asyncio.Event()
 
     async def handler(call):
@@ -682,18 +697,163 @@ async def test_trimming_a_cancelled_round_never_touches_the_interrupters_round()
         [_text("B查完了。"), _text("", "stop")],
     ]
     turn_a = asyncio.create_task(client.stream_text("A"))
-    for _ in range(50):
-        if any(isinstance(m, dict) and m.get("tool_calls") for m in client._conversation_history):
-            break
-        await asyncio.sleep(0)
+    await _until(lambda: _round_texts(client))
     await client.handle_interruption()
-    await client.stream_text("B")
+    if later == "typed":
+        await client.stream_text("B")
+    else:
+        assert await client.prompt_ephemeral("callback") is True
     release.set()
     await turn_a
-    rounds = {m["tool_calls"][0]["id"]: m for m in client._conversation_history
-              if isinstance(m, dict) and m.get("tool_calls")}
-    assert rounds["b1"]["content"] == "B也在查"
-    assert rounds["a1"]["content"] == ""
+    if later == "typed":
+        assert _round_texts(client) == {"a1": "", "b1": "B也在查"}
+    else:
+        assert _round_texts(client) == {"a1": ""}
+        assert _history_shape(client)[-1] == ("ai", "B也在查B查完了。", None)
+
+
+async def test_a_cut_stream_never_takes_a_round_saved_in_its_setup_window():
+    """R1 is still live while R2 saves its user message and awaits the
+    transcript send; R1 reaches its tool round in that window, so the round
+    sits after R2's user message. R2 begins (displacing R1), shows text and
+    its task is cancelled outright. What R2 showed is its own reply: R1's
+    round keeps R1's text."""
+    r2_saved, r1_parked, cut_point, never = (asyncio.Event() for _ in range(4))
+
+    async def handler(call):
+        r1_parked.set()
+        await never.wait()
+
+    async def transcript(_text_):
+        r2_saved.set()
+        await asyncio.wait_for(r1_parked.wait(), 5)
+
+    async def parked():
+        cut_point.set()
+        await never.wait()
+
+    client = _client(handler=handler)
+    client.script = [
+        [_text("R1在查"), r2_saved.wait, _tool_calls("r1")],
+        [_text("R2说到一半，"), parked, _text("late"), _text("", "stop")],
+    ]
+    turn_1 = asyncio.create_task(client.stream_text("R1"))
+    await _until(lambda: client.requests)
+    turn_2 = asyncio.ensure_future(
+        client.stream_text("R2", input_transcript_callback=transcript))
+    await asyncio.wait_for(cut_point.wait(), 5)
+    await client.handle_interruption()
+    turn_2.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn_2
+    assert _history_shape(client) == [
+        ("human", "R1", None),
+        ("human", "R2", None),
+        ("assistant", "R1在查", ["r1"]),
+        ("ai", "R2说到一半，", None),
+    ]
+    turn_1.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn_1
+    # R1's round ran no call and went; what R1 showed stays in R1's turn.
+    assert _history_shape(client) == [
+        ("human", "R1", None),
+        ("ai", "R1在查", None),
+        ("human", "R2", None),
+        ("ai", "R2说到一半，", None),
+    ]
+
+
+@pytest.mark.parametrize("provider", ["openai", "gemini"])
+@pytest.mark.parametrize("prefix", [0, 100])
+async def test_a_cut_round_after_a_later_user_message_takes_the_shown_text(provider, prefix):
+    """R1's first round a1 finishes live; its second round a2 lands after
+    R2's user message (R2's setup window), runs a2x and parks in a2y. R2 runs
+    its own round and reply; then R1's task is cut before a2's sentinel. a2
+    holds what R1 showed after a1 (nothing when the name-prefix buffer held
+    it back), with no second copy as a reply; a1 and R2's round keep theirs."""
+    r2_saved, a2y_parked, never = (asyncio.Event() for _ in range(3))
+
+    async def handler(call):
+        if call.call_id == "a2y":
+            a2y_parked.set()
+            await never.wait()
+        return ToolResult(call_id=call.call_id, name=call.name, output={})
+
+    async def transcript(_text_):
+        r2_saved.set()
+        await asyncio.wait_for(a2y_parked.wait(), 5)
+
+    client = _client(provider, handler=handler, cap=3)
+    client._prefix_buffer_size = prefix
+    if provider == "gemini":
+        client.script = [
+            [_gemini_calls("a1", text="R1第一段先说")],
+            [_GenaiChunk([_GenaiPart(text="R1二")]), r2_saved.wait,
+             _gemini_calls("a2x", "a2y")],
+            [_gemini_calls("b1", text="R2也在查")],
+            [_GenaiChunk([_GenaiPart(text="R2查完了。")])],
+        ]
+    else:
+        client.script = [
+            [_text("R1第一段先说"), _tool_calls("a1")],
+            [_text("R1二"), r2_saved.wait, _tool_calls("a2x", "a2y")],
+            [_text("R2也在查"), _tool_calls("b1")],
+            [_text("R2查完了。"), _text("", "stop")],
+        ]
+    turn_1 = asyncio.create_task(client.stream_text("R1"))
+    await _until(lambda: len(client.requests) >= 2)
+    await client.stream_text("R2", input_transcript_callback=transcript)
+    a1_text = _round_texts(client)["a1"]
+    turn_1.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn_1
+    assert _round_texts(client) == {
+        "a1": a1_text, "a2x": "R1二" if prefix == 0 else "", "b1": "R2也在查",
+    }
+    assert [s for s in _history_shape(client) if s[0] == "ai"] == [
+        ("ai", "R2查完了。", None),
+    ]
+
+
+@pytest.mark.parametrize("provider", ["openai", "gemini"])
+async def test_a_cancelled_round_saved_after_a_later_user_message_is_still_trimmed(provider):
+    """The same window, but R1's handler returns after R2 finished its own
+    tool round and reply. R1's kept round is R1's although R2's user message
+    comes first: it holds only what R1 showed (nothing, the name-prefix
+    buffer held it back), and R2's round keeps R2's text."""
+    r2_saved, r1_parked, release = (asyncio.Event() for _ in range(3))
+
+    async def handler(call):
+        if call.call_id == "r1":
+            r1_parked.set()
+            await release.wait()
+        return ToolResult(call_id=call.call_id, name=call.name, output={})
+
+    async def transcript(_text_):
+        r2_saved.set()
+        await asyncio.wait_for(r1_parked.wait(), 5)
+
+    client = _client(provider, handler=handler)
+    client._prefix_buffer_size = 100
+    if provider == "gemini":
+        client.script = [
+            [_GenaiChunk([_GenaiPart(text="R1在查")]), r2_saved.wait, _gemini_calls("r1")],
+            [_gemini_calls("r2", text="R2也在查")],
+            [_GenaiChunk([_GenaiPart(text="R2查完了。")])],
+        ]
+    else:
+        client.script = [
+            [_text("R1在查"), r2_saved.wait, _tool_calls("r1")],
+            [_text("R2也在查"), _tool_calls("r2")],
+            [_text("R2查完了。"), _text("", "stop")],
+        ]
+    turn_1 = asyncio.create_task(client.stream_text("R1"))
+    await _until(lambda: client.requests)
+    await client.stream_text("R2", input_transcript_callback=transcript)
+    release.set()
+    await turn_1
+    assert _round_texts(client) == {"r1": "", "r2": "R2也在查"}
 
 
 async def test_a_tools_refusal_retry_cancelled_in_flight_still_publishes():
