@@ -1322,6 +1322,132 @@ async def test_a_truncation_recovery_cut_midway_still_ends_its_turn(cut_at):
     assert [m.get("request_id") for m in sync[body[-1]:] if m.get("data") == "turn end"] == ["req-A"]
 
 
+@pytest.mark.parametrize("cut_at", ["turn_end_ws_send", "during_finalize"])
+async def test_an_interruption_after_a_final_discard_ended_the_turn_closes_nothing(cut_at):
+    """A final discard (no rerolls left) ends the reply's turn while its
+    generation is still live: the discard callback runs inside the stream
+    loop. An input interrupting after that turn end (while its frontend copy
+    is sent, or while the discard's own wrap-up runs) takes over a reply whose
+    turn is already over. Closing it again sent ``turn abandoned`` for the
+    ended request and owed a second wrap-up (a second finalize). Only the
+    request id is released, right away."""
+    client = _client()
+    client.enable_response_guard = True
+    client.max_response_length = 8
+    client.max_response_rerolls = 0
+    mgr = _manager(client)
+    mgr.use_tts = False
+    mgr.user_language = "zh-CN"
+    ws = _FakeConnectedWebSocket()
+    mgr.websocket = ws
+
+    owner = _ReplyTurn(speech_id=mgr.current_speech_id, request_id="req-A")
+    owner.session = client
+    mgr._open_reply_turn = owner
+    mgr._active_text_request_id = "req-A"
+
+    seen = {}
+    finalize_calls = []
+    real_finalize = mgr._finalize_turn_after_emit
+
+    async def interrupt_once(where):
+        if seen.get("cut"):
+            return
+        seen["cut"] = where
+        seen["turn_ended_at_cut"] = owner.turn_ended
+        seen["gen_live_at_cut"] = client._active_response_generation is not None
+        seen["interrupted"] = await M._interrupt_offline_reply(mgr, client)
+        seen["request_id_after_cut"] = mgr._active_text_request_id
+        seen["owed_after_cut"] = mgr._turn_wrap_up_owed
+
+    real_send = ws.send_json
+
+    async def send_json(payload):
+        await real_send(payload)
+        if (
+            cut_at == "turn_end_ws_send"
+            and payload.get("data") == "turn end"
+            and payload.get("request_id") == "req-A"
+        ):
+            await interrupt_once(cut_at)
+
+    ws.send_json = send_json
+
+    async def finalize():
+        finalize_calls.append(owner.turn_ended)
+        await real_finalize()
+        if cut_at == "during_finalize":
+            await interrupt_once(cut_at)
+
+    mgr._finalize_turn_after_emit = finalize
+
+    async def discarded(reason, attempt, max_attempts, will_retry, message=None):
+        await mgr.handle_response_discarded(
+            reason, attempt, max_attempts, will_retry, message,
+            request_id="req-A", reply_turn=owner,
+        )
+
+    async def done():
+        await mgr.handle_response_complete(reply_turn=owner)
+
+    client.script = [
+        [_text("我在说，一直说，不停地说，还在说，继续说，说个没完，还要说，"), _text("", "stop")],
+    ]
+    await client.stream_text(
+        "hi",
+        response_discarded_callback=discarded,
+        response_done_callback=done,
+        reply_owner=owner,
+    )
+    await _settle_bg(mgr)
+    await mgr._settle_owed_turn_wrap_up()
+    await _settle_bg(mgr)
+
+    system = [m for m in ws.sent if m.get("type") == "system"]
+    turn_ends_sync = [
+        m for m in mgr.sync_message_queue.messages
+        if isinstance(m, dict) and m.get("data") == "turn end"
+    ]
+    assert seen["turn_ended_at_cut"] is True and seen["gen_live_at_cut"] is True
+    assert seen["interrupted"] is True
+    assert seen["request_id_after_cut"] is None
+    assert seen["owed_after_cut"] is False
+    assert [m.get("request_id") for m in turn_ends_sync] == ["req-A"]
+    assert system == [{"type": "system", "data": "turn end", "request_id": "req-A"}]
+    assert finalize_calls == [True]
+
+
+@pytest.mark.parametrize("displaced", [False, True])
+@pytest.mark.parametrize("active_request", ["req-A", "req-B"])
+async def test_a_reply_whose_turn_ended_is_taken_over_without_a_close(
+    displaced, active_request,
+):
+    """Either taker of a bound reply whose final discard already sent its
+    turn end (an interrupter, or a user reply that began over it) closes
+    nothing: no second turn end, the AI-turn buffer and the staged turn meta
+    (by now another turn's) stay, nothing is owed and nothing goes to the
+    frontend. The reply's request id is released only while the shared field
+    still holds it; a newer request's id is left alone."""
+    mgr = _manager(_client())
+    owner = _ReplyTurn(speech_id=mgr.current_speech_id, request_id="req-A")
+    owner.turn_ended = True
+    mgr._active_text_request_id = active_request
+    mgr._current_ai_turn_text = "下一轮的话"
+    meta = {"kind": "avatar_interaction"}
+    mgr._pending_turn_meta = meta
+
+    send = mgr._close_taken_over_offline_reply(
+        InterruptedReply("response", finished=True, owner=owner), displaced=displaced,
+    )
+
+    assert send is None
+    assert _turn_ends(mgr) == []
+    assert mgr._current_ai_turn_text == "下一轮的话"
+    assert mgr._pending_turn_meta is meta
+    assert mgr._turn_wrap_up_owed is False
+    assert mgr._active_text_request_id == (None if active_request == "req-A" else "req-B")
+
+
 # ── An independent-ASR voice reply is taken over before its task is cancelled ──
 
 

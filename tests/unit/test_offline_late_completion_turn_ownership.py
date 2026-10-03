@@ -827,3 +827,210 @@ async def test_a_final_discard_that_ended_nothing_leaves_its_completion_to_end_t
     assert [m["request_id"] for m in _ws(mgr, "turn end")] == ["req-A"]
     assert [m["request_id"] for m in _sync(mgr, "turn end")] == ["req-A"]
     assert mgr._active_text_request_id == "req-B"
+
+
+# ── Takeover callbacks of a retired client ──────────────────────────────────
+
+async def _guarded_client(monkeypatch, script):
+    """A real client over ``script``, its callbacks bound to a full manager as
+    ``_create_offline_vlm_client`` and ``_bind_session_lifecycle_callbacks``
+    bind them, installed as ``mgr.session``. Returns the manager, the client
+    and the list of sessions each finalize ran under."""
+    from tests.unit.session_handoff_harness import make_full_manager
+
+    client = _client(script)
+    mgr, _, _ = await make_full_manager(monkeypatch)
+    client.on_text_delta = mgr.handle_text_data
+    client.on_response_done = mgr.handle_response_complete
+    client.on_response_discarded = mgr.handle_response_discarded
+    client.on_proactive_done = mgr.handle_proactive_complete
+    client.on_response_displaced = mgr._close_displaced_offline_turn
+    client.on_idle = mgr._on_offline_session_idle
+    mgr.session = client
+    mgr.is_active = True
+    mgr._register_connection(client)
+    mgr._bind_owned_output_callbacks(client)
+
+    finalized = []
+    real_finalize = mgr._finalize_turn_after_emit
+
+    async def finalize():
+        finalized.append(mgr.session)
+        await real_finalize()
+
+    monkeypatch.setattr(mgr, "_finalize_turn_after_emit", finalize)
+    return mgr, client, finalized
+
+
+async def _settle_manager(mgr):
+    for _ in range(5):
+        await asyncio.sleep(0.01)
+    for task in tuple(getattr(mgr, "_bg_tasks", ())):
+        task.cancel()
+
+
+async def _guarded_displacement(monkeypatch, successor):
+    """The client's voice reply parks mid-stream; unless ``successor`` is
+    "live", the client is retired and ``mgr.session`` replaced ("swapped") or
+    cleared ("ended"); then a late reply call begins over the parked reply,
+    displacing it. Returns the manager, the client, the sync and WebSocket
+    messages after the park, and the finalize calls."""
+    parked, release = asyncio.Event(), asyncio.Event()
+
+    async def park():
+        parked.set()
+        await release.wait()
+
+    mgr, client, finalized = await _guarded_client(monkeypatch, [
+        [_text("旧回复"), park, _text("", "stop")],
+        [_text("迟到的回复"), _text("", "stop")],
+    ])
+    reply = asyncio.create_task(client._run_external_voice_stream("你好"))
+    await asyncio.wait_for(parked.wait(), 5)
+
+    if successor != "live":
+        mgr._connection_record(client).retired = True
+        mgr.session = object() if successor == "swapped" else None
+        mgr._current_ai_turn_text = "NEW SESSION REPLY"
+        # The successor's own debt, which only its own idle may pay.
+        mgr._turn_wrap_up_owed = True
+    sync_before = len(mgr.sync_message_queue.queue)
+    ws_before = len(mgr.websocket.messages)
+
+    late = asyncio.create_task(client.stream_text("迟到"))
+    await asyncio.sleep(0.2)
+    release.set()
+    results = await asyncio.wait_for(asyncio.gather(reply, late, return_exceptions=True), 5)
+    assert not any(isinstance(r, BaseException) for r in results), results
+    await _settle_manager(mgr)
+    sync = list(mgr.sync_message_queue.queue)[sync_before:]
+    ws = mgr.websocket.messages[ws_before:]
+    return mgr, client, sync, ws, finalized
+
+
+@pytest.mark.parametrize("successor", ["swapped", "ended"])
+async def test_a_retired_clients_displacement_and_idle_leave_the_host_alone(
+    monkeypatch, successor,
+):
+    """A retired client (hot-swapped out, or ``end_session`` already cleared
+    ``self.session``) whose late reply call displaces its own parked reply
+    must not close the host's current turn: the displacement would flush the
+    successor's in-progress text and queue a turn end for it, and the idle
+    notification would pay the successor's owed wrap-up against whatever
+    session is current (``None`` included), mid-reply."""
+    mgr, _, sync, ws, finalized = await _guarded_displacement(monkeypatch, successor)
+
+    assert mgr._current_ai_turn_text == "NEW SESSION REPLY"
+    assert finalized == []
+    assert mgr._turn_wrap_up_owed is True
+    assert not any(m.get("data") == "turn end" for m in sync), sync
+    assert not any(m.get("data") in ("turn end", "turn abandoned") for m in ws), ws
+
+
+async def test_the_guarded_displacement_still_seals_the_live_clients_bubble(monkeypatch):
+    """On the installed client the guard passes the displacement through
+    unchanged: the follow-up it hands back stays a plain callable, so the
+    displaced reply's frontend turn end goes out before the displacing reply's
+    first chunk."""
+    mgr, client, sync, ws, _ = await _guarded_displacement(monkeypatch, "live")
+    assert mgr.session is client
+
+    turn_ends = [m for m in sync if m.get("data") == "turn end"]
+    assert len(turn_ends) == 2, sync  # the displaced reply's, then the late one's
+    ws_kinds = [
+        "turn end" if m.get("data") == "turn end"
+        else "late" if "迟到的回复" in str(m.get("text", ""))
+        else None
+        for m in ws
+    ]
+    ws_kinds = [k for k in ws_kinds if k]
+    assert ws_kinds[:2] == ["turn end", "late"], ws
+
+
+async def test_the_guarded_idle_still_pays_the_live_clients_owed_wrap_up(monkeypatch):
+    """An interrupted typed reply still finishing its call when the
+    interruption returns: its wrap-up is owed, and the installed client's idle
+    notification passes the guard and pays it once that call returns."""
+    parked, release = asyncio.Event(), asyncio.Event()
+
+    async def park():
+        parked.set()
+        await release.wait()
+
+    mgr, client, finalized = await _guarded_client(monkeypatch, [
+        [_text("旧回复"), park, _text("", "stop")],
+    ])
+    reply = asyncio.create_task(client.stream_text("你好"))
+    await asyncio.wait_for(parked.wait(), 5)
+    assert await mgr._interrupt_offline_reply(client)
+    assert mgr._turn_wrap_up_owed is True and finalized == []
+
+    release.set()
+    await asyncio.wait_for(reply, 5)
+    await _settle_manager(mgr)
+
+    assert finalized == [client]
+    assert mgr._turn_wrap_up_owed is False
+
+
+async def test_lifecycle_bound_takeover_callbacks_act_only_for_the_installed_client(
+    monkeypatch,
+):
+    """As ``_create_offline_vlm_client`` and ``_bind_session_lifecycle_callbacks``
+    bind them, ``on_response_displaced`` and ``on_idle`` stay sync and are
+    guarded at call time. A client bound before it is installed (a handoff
+    candidate, a final swap's pending session) gets None from both and leaves
+    the host's turn alone; once installed, the same callbacks pass through
+    (the displacement hands back its follow-up, idle settles the owed
+    wrap-up); retired while still installed, it gets None again."""
+    import inspect
+
+    from tests.unit.session_handoff_harness import make_full_manager
+
+    mgr, _, _ = await make_full_manager(monkeypatch)
+    config = {"base_url": "http://offline.invalid/v1", "api_key": "k", "model": "m"}
+    client = mgr._create_offline_vlm_client(
+        conversation_config=config, vision_config=dict(config),
+        tool_definitions=[], max_response_length=100, external_tts_enabled=False,
+    )
+    mgr._bind_session_lifecycle_callbacks(client)
+    for name in ("on_response_displaced", "on_idle"):
+        callback = getattr(client, name)
+        assert getattr(callback, "_session_owner", None) is client, name
+        assert not inspect.iscoroutinefunction(callback), name
+
+    settles = []
+    mgr._fire_task = lambda coro: (settles.append(coro), coro.close())
+
+    def host_turn(text):
+        mgr._current_ai_turn_text = text
+        mgr._turn_wrap_up_owed = True
+        return len(mgr.sync_message_queue.queue)
+
+    def assert_left_alone(text, queued):
+        assert client.on_response_displaced(InterruptedReply("response")) is None
+        assert client.on_idle() is None
+        assert mgr._current_ai_turn_text == text
+        assert mgr._turn_wrap_up_owed is True
+        assert len(mgr.sync_message_queue.queue) == queued
+        assert settles == []
+
+    mgr.session = object()  # the session the client is to replace
+    mgr._register_connection(client)
+    assert_left_alone("CURRENT TURN", host_turn("CURRENT TURN"))
+
+    mgr.session = client
+    queued = host_turn("DISPLACED REPLY")
+    followup = client.on_response_displaced(InterruptedReply("response"))
+    assert callable(followup)
+    await followup()
+    assert mgr._current_ai_turn_text == ""
+    assert [m.get("data") for m in list(mgr.sync_message_queue.queue)[queued:]] == ["turn end"]
+    assert mgr.websocket.messages[-1].get("data") == "turn end"
+    client.on_idle()
+    assert len(settles) == 1
+
+    settles.clear()
+    mgr._connection_record(client).retired = True
+    assert_left_alone("SUCCESSOR TURN", host_turn("SUCCESSOR TURN"))
+    await client.close()

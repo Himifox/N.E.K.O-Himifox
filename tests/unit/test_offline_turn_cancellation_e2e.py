@@ -1236,3 +1236,220 @@ async def test_a_cancelled_round_whose_turn_left_history_is_not_put_back():
     release.set()
     await turn_a
     assert _history_shape(client) == [("human", "B", None), ("ai", "好的", None)]
+
+
+# ── A task cut after the stream loop (tenth review round) ───────────────────
+#
+# The independent-ASR child task is cancelled outright by the interruption
+# that takes its reply over, so none of the turn's own checks run. The
+# end-of-stream flush and the summary epilogue still emit text before the
+# reply commits; a cut there keeps what that commit would have written, once,
+# and never text a guard discards.
+
+def _parked_when(predicate):
+    """An ``on_text_delta`` that parks for good in the first send matching
+    ``predicate(text, kwargs)`` (by then the text is published), and the
+    event set once it has."""
+    entered = asyncio.Event()
+
+    async def send(text, is_first, **kwargs):
+        if not entered.is_set() and predicate(text, kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+    return AsyncMock(side_effect=send), entered
+
+
+async def _parked_after(entered):
+    entered.set()
+    await asyncio.Event().wait()
+
+
+async def _cut_voice_turn(client, entered):
+    """Run "Q1" as an independent-ASR turn; once ``entered`` is set,
+    interrupt it (the take-over cancels its task) and save the next user
+    message, "Q2"."""
+    client._external_voice_submit_task = None
+    turn = asyncio.create_task(client._run_external_voice_stream("Q1"))
+    await asyncio.wait_for(entered.wait(), 2)
+    assert await client.handle_interruption()
+    client._conversation_history.append(HumanMessage(content="Q2"))
+    (outcome,) = await asyncio.gather(turn, return_exceptions=True)
+    assert isinstance(outcome, client._ExternalVoiceSubmitCancelled), outcome
+    client.on_response_done.assert_not_awaited()
+
+
+def _reply_chunks(provider, text):
+    if provider == "gemini":
+        return [_GenaiChunk([_GenaiPart(text=text)])]
+    return [_text(text), _text("", "stop")]
+
+
+def _count_words(monkeypatch):
+    monkeypatch.setattr(_ofc_streaming, "count_tokens", lambda text: len((text or "").split()))
+    monkeypatch.setattr(
+        _ofc_streaming, "truncate_to_tokens",
+        lambda text, budget: " ".join((text or "").split()[:budget]),
+    )
+
+
+_SUMMARY_PREFIX = "one two three four. five,"
+_SUMMARY_SHORT_TAIL = _SUMMARY_PREFIX + " six seven eight nine ten."
+_SUMMARY_LONG_TAIL = _SUMMARY_SHORT_TAIL + " " + " ".join(f"w{i}" for i in range(25)) + "."
+_SUMMARY_GIBBERISH_TAIL = _SUMMARY_PREFIX + " " + " ".join(f"w{i}" for i in range(120))
+
+
+def _summary_client(monkeypatch, text, summary=None):
+    """A long-reply-summary client over a four-word budget: the reply cuts
+    over at ``_SUMMARY_PREFIX``, and ``summary`` is what the summary call
+    returns."""
+    _count_words(monkeypatch)
+    client = _client()
+    client.enable_response_guard = True
+    client.enable_long_response_summary = True
+    client.max_response_length = 4
+
+    async def summarize(prefix, tail):
+        return summary
+
+    client._summarize_tail_for_tts = summarize
+    client.script = [[_text(text), _text("", "stop")]]
+    return client
+
+
+@pytest.mark.parametrize("provider", ["openai", "gemini"])
+async def test_a_task_cut_in_the_end_of_stream_flush_keeps_the_shown_reply(provider):
+    """A short reply sits whole in the name-prefix buffer, so the
+    end-of-stream flush is what shows it. Cut while that send is parked, the
+    reply is kept, before the interrupter's message."""
+    client = _client(provider)
+    client._prefix_buffer_size = 100
+    client.on_text_delta, entered = _parked_when(lambda text, _kw: text == "短回复")
+    client.script = [_reply_chunks(provider, "短回复")]
+    await _cut_voice_turn(client, entered)
+    assert _history_shape(client) == [
+        ("human", "Q1", None), ("ai", "短回复", None), ("human", "Q2", None),
+    ]
+
+
+@pytest.mark.parametrize("provider", ["openai", "gemini"])
+async def test_a_task_cut_in_the_flush_after_a_tool_round_keeps_only_its_segment(provider):
+    """After a tool round the flush shows the post-tool segment. Cut there,
+    that segment is the reply after the round; the round, whose sentinel
+    this turn already handled, keeps its own text."""
+    client = _client(provider, handler=_noop_tool)
+    client._prefix_buffer_size = 100
+    client.on_text_delta, entered = _parked_when(lambda text, _kw: text == "查到了")
+    if provider == "gemini":
+        first = [_gemini_calls("c1", text="我查一下")]
+    else:
+        first = [_text("我查一下"), _tool_calls("c1")]
+    client.script = [first, _reply_chunks(provider, "查到了")]
+    await _cut_voice_turn(client, entered)
+    assert _history_shape(client) == [
+        ("human", "Q1", None),
+        ("assistant", "我查一下", ["c1"]),
+        ("tool", "{}", None),
+        ("ai", "查到了", None),
+        ("human", "Q2", None),
+    ]
+
+
+@pytest.mark.parametrize("epilogue", ["short_tail", "summary", "summary_failed"])
+async def test_a_task_cut_in_the_summary_epilogue_keeps_what_its_commit_would(
+    monkeypatch, epilogue,
+):
+    """The summary epilogue sends the tail, or its summary, to TTS before
+    the reply commits. Cut in that send, the reply keeps what the commit
+    would have written: the shown text when the tail is read out, the
+    prefix and the summary when the summary is (never the UI-only tail)."""
+    summary = "总之就这样啦" if epilogue == "summary" else None
+    text = _SUMMARY_SHORT_TAIL if epilogue == "short_tail" else _SUMMARY_LONG_TAIL
+    client = _summary_client(monkeypatch, text, summary)
+    client.on_text_delta, entered = _parked_when(
+        lambda _text_, kw: kw.get("ui_enabled") is False,
+    )
+    await _cut_voice_turn(client, entered)
+    shown = "".join(
+        call.args[0] for call in client.on_text_delta.await_args_list
+        if call.kwargs.get("ui_enabled", True)
+    )
+    assert shown == text
+    kept = _SUMMARY_PREFIX + summary if summary else text
+    assert _history_shape(client) == [
+        ("human", "Q1", None), ("ai", kept, None), ("human", "Q2", None),
+    ]
+
+
+@pytest.mark.parametrize("rerolls", [1, 0])
+async def test_a_task_cut_while_a_guard_discards_the_reply_keeps_none_of_it(
+    monkeypatch, rerolls,
+):
+    """A length guard with nothing to recover discards what was shown: for
+    a retry, or for the placeholder the caller writes once the rerolls are
+    spent. Cut while that discard is sent, the turn keeps none of it."""
+    _count_words(monkeypatch)
+    client = _client()
+    client.enable_response_guard = True
+    client.max_response_length = 4
+    client.max_response_rerolls = rerolls
+    entered = asyncio.Event()
+
+    async def discard(*_args):
+        await _parked_after(entered)
+
+    client.on_response_discarded = AsyncMock(side_effect=discard)
+    client.script = [[
+        _text("hello there friend"), _text(" aaaa bbbb cccc dddd eeee"), _text("", "stop"),
+    ]]
+    await _cut_voice_turn(client, entered)
+    assert _emitted(client) == ["hello there friend"]
+    assert client.on_response_discarded.await_args.args[3] is bool(rerolls)
+    assert _history_shape(client) == [("human", "Q1", None), ("human", "Q2", None)]
+
+
+@pytest.mark.parametrize("commit", ["reply", "length_recovery", "gibberish_prefix"])
+async def test_a_task_cut_after_the_commit_writes_the_reply_once(monkeypatch, commit):
+    """The repetition check runs after the reply is written. Cut there, the
+    reply is not written a second time (nor the gibberish tail the summary
+    fallback leaves out)."""
+    if commit == "reply":
+        client = _client()
+        client.script = [_reply_chunks("openai", "你好呀。")]
+        kept = "你好呀。"
+    elif commit == "length_recovery":
+        client, _ = _length_guarded_client("name_prefix")
+        kept = "先说一句。"
+    else:
+        client = _summary_client(monkeypatch, _SUMMARY_GIBBERISH_TAIL)
+        kept = _SUMMARY_PREFIX
+    entered = asyncio.Event()
+
+    async def parked_check(_response):
+        await _parked_after(entered)
+
+    client._check_repetition = parked_check
+    await _cut_voice_turn(client, entered)
+    assert _history_shape(client) == [
+        ("human", "Q1", None), ("ai", kept, None), ("human", "Q2", None),
+    ]
+
+
+async def test_a_task_cut_in_the_flush_of_a_rerolled_attempt_keeps_only_that_attempt():
+    """The end-of-stream flush finds a master-name prefix: the attempt is
+    discarded and rerolled. The reroll's own flush is then cut: only the
+    reroll's text is kept, never the discarded attempt's."""
+    client = _client()
+    client._prefix_buffer_size = 100
+    client.max_response_rerolls = 1
+    client.on_response_discarded = AsyncMock()
+    client.on_text_delta, entered = _parked_when(lambda text, _kw: text == "重来的回复")
+    client.script = [
+        [_text("M|我是主人"), _text("", "stop")],
+        [_text("重来的回复"), _text("", "stop")],
+    ]
+    await _cut_voice_turn(client, entered)
+    assert client.on_response_discarded.await_args.args[3] is True  # will_retry
+    assert _history_shape(client) == [
+        ("human", "Q1", None), ("ai", "重来的回复", None), ("human", "Q2", None),
+    ]

@@ -394,12 +394,14 @@ class _StreamingMixin:
     def _keep_shown_text_of_cut_stream(
         self, anchor, shown: str, segment_round, generation: int, rounds,
     ) -> None:
-        """Keep what a reply had shown when its task was cancelled mid-stream.
+        """Keep what a reply had shown when its task was cancelled before it
+        committed.
 
-        A cancelled task never reaches the check after ``stream_text``'s
-        stream loop, so this does what that check, or the tool round
-        sentinel before it, would have done with ``shown`` (the text shown
-        since the last persisted tool round). A round of this turn's own
+        A task cancelled in the stream loop, the end-of-stream flush or the
+        summary epilogue never reaches the commit it was heading for, so
+        this does what that commit, or the tool round sentinel before it,
+        would have done with ``shown`` (the text shown since the last
+        persisted tool round). A round of this turn's own
         ``rounds`` kept after ``segment_round`` (the one the last sentinel
         reported) already holds that text, its sentinel lost to the
         cancellation: it is trimmed to it. Otherwise the text is committed as
@@ -1082,8 +1084,15 @@ class _StreamingMixin:
         status_reported = False
         guard_exhausted = False
         # Set while a cancellation of this task would skip a cancelled-reply
-        # commit (the stream loop, the summary call); see the except below.
-        # ``segment_round`` is the tool round the last sentinel reported.
+        # commit: from the stream loop through the end-of-stream flush and the
+        # summary epilogue (the summary call, the tail or summary sent to
+        # TTS), each of which emits text before this turn commits. Cleared
+        # right before every commit, so an await after one (the repetition
+        # check) never writes the reply twice, and before every guard
+        # decision, whose text is either committed there or discarded. Every
+        # await while it is set leaves in ``assistant_message`` what this turn
+        # would commit after it; see the except below. ``segment_round`` is
+        # the tool round the last sentinel reported.
         cut_keeps_shown = False
         segment_round = None
         # Empty-completion 诊断字段重置：每轮 turn 独立，否则会读到上一轮的旧值。
@@ -1604,7 +1613,6 @@ class _StreamingMixin:
                                         break
                             elif content and not content.strip():
                                 logger.debug(f"OmniOfflineClient: 过滤空白内容 - content_repr: {repr(content)[:100]}")
-                        cut_keeps_shown = False
 
                         # A guard pause still owns this generation. Cancellation
                         # or replacement does not: discard every un-emitted
@@ -1612,6 +1620,7 @@ class _StreamingMixin:
                         # but keep what already reached UI/TTS, or the next
                         # request would not see what the user just saw.
                         if self._active_response_generation != response_generation:
+                            cut_keeps_shown = False
                             self._commit_cancelled_reply(
                                 user_message, AIMessage(content=assistant_message),
                                 response_generation,
@@ -1772,6 +1781,10 @@ class _StreamingMixin:
                                             is_first_chunk = False
 
                         if guard_triggered:
+                            # Every way out of here either commits the
+                            # recovery or discards the text (a retry, or a
+                            # placeholder written by the caller).
+                            cut_keeps_shown = False
                             guard_attempt += 1
                             reroll_count += 1
                             will_retry = guard_attempt <= self.max_response_rerolls
@@ -1947,6 +1960,7 @@ class _StreamingMixin:
                             # 重复检测只看 prefix（= 真正进 history / 被 TTS 读的部分）。
                             # 用 assistant_message_total 会把判定为乱码、已丢弃的 tail
                             # 也塞进 _recent_responses，污染后续重复判定。
+                            cut_keeps_shown = False
                             if (
                                 self._commit_reply(
                                     user_message, summary_prefix_for_history, response_generation,
@@ -1974,17 +1988,16 @@ class _StreamingMixin:
                                         ui_enabled=False, tts_enabled=True,
                                     )
                             else:
-                                cut_keeps_shown = True
                                 summary_text = await self._summarize_tail_for_tts(
                                     prefix=summary_prefix_for_history,
                                     tail=summary_tail_buffer,
                                 )
-                                cut_keeps_shown = False
                                 # The summary call is a cancellation point of its
                                 # own: a turn cancelled while it ran must not
                                 # reach TTS or commit prefix + summary. Keep what
                                 # the UI already shows, like the check above.
                                 if self._active_response_generation != response_generation:
+                                    cut_keeps_shown = False
                                     self._commit_cancelled_reply(
                                         user_message, AIMessage(content=assistant_message),
                                         response_generation,
@@ -1996,13 +2009,15 @@ class _StreamingMixin:
                                         "(tail=%d chars → summary=%d chars)",
                                         len(summary_tail_buffer), len(summary_text),
                                     )
+                                    # history = prefix + summary，与 TTS 听到的对齐。
+                                    # Set before the send: a cancellation during
+                                    # it keeps this, as the commit below would.
+                                    assistant_message = summary_prefix_for_history + summary_text
                                     if self.on_text_delta:
                                         await self.on_text_delta(
                                             summary_text, False,
                                             ui_enabled=False, tts_enabled=True,
                                         )
-                                    # history = prefix + summary，与 TTS 听到的对齐
-                                    assistant_message = summary_prefix_for_history + summary_text
                                 else:
                                     logger.info(
                                         "OmniOfflineClient summary: 摘要失败/为空，"
@@ -2021,6 +2036,7 @@ class _StreamingMixin:
                         # final AIMessage 只写未被 inline 持久化的最后一段
                         # （pre-tool 文本已经在前面 ``assistant.tool_calls.content``
                         # 里了，再 append 一次会双写历史）。
+                        cut_keeps_shown = False
                         _live_at_commit = self._commit_reply(
                             user_message, assistant_message, response_generation,
                         )
@@ -2196,9 +2212,10 @@ class _StreamingMixin:
             # The independent-ASR child task is cancelled outright: by
             # handle_interruption once it has taken this reply over, or with
             # the reply still live by close() or a cancelled voice turn (its
-            # completion then still runs). Either way the checks after the
-            # stream loop and the summary call never run: keep what was
-            # shown, as they would have.
+            # completion then still runs). Either way the commit this turn
+            # was heading for (after the stream loop, the end-of-stream flush
+            # or the summary epilogue) never runs: keep what was shown, as it
+            # would have.
             if cut_keeps_shown:
                 self._keep_shown_text_of_cut_stream(
                     user_message, assistant_message, segment_round,

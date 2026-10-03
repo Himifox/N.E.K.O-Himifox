@@ -92,15 +92,32 @@ async def _retire_replaced_clients(client, closers) -> None:
 
 
 async def _close_retired_clients(client) -> None:
+    """Run the closes waiting on ``client`` (``_retire_replaced_clients``).
+
+    Takes the batch waiting now; closes queued while it runs wait for the
+    next sweep, since a reply call that started meanwhile may be streaming
+    on those clients. When this is cancelled midway (``close()`` or an
+    interruption cancelling the task that runs it), the closes not yet
+    started go back to the front of the queue, for ``close()``'s own sweep
+    or the next time no reply call is in flight.
+    """
     closers = getattr(client, "_retired_client_closers", None)
     if not closers:
         return
     client._retired_client_closers = []
-    for close in closers:
-        try:
-            await close()
-        except Exception as e:
-            logger.warning("OmniOfflineClient: closing a replaced client failed: %s", e)
+    try:
+        while closers:
+            close = closers.pop(0)
+            try:
+                await close()
+            except Exception as e:
+                logger.warning("OmniOfflineClient: closing a replaced client failed: %s", e)
+    finally:
+        if closers:
+            waiting = getattr(client, "_retired_client_closers", None)
+            if waiting is None:
+                waiting = client._retired_client_closers = []
+            waiting[:0] = closers
 
 
 def _tracked_reply_call(method):

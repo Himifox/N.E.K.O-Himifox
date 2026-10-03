@@ -250,3 +250,115 @@ async def test_a_switch_with_no_reply_in_flight_closes_the_old_client_at_once(mo
     assert await client.switch_model("vision-x", use_vision_config=True) is True
     assert client.llm is switch.created[0]
     assert switch.old.closed == 1
+
+
+def _recorded_closer(name, done, park=None):
+    """An async close that records ``name`` once it completes; ``park`` is a
+    (parked, release) pair it waits on first."""
+    async def close():
+        if park is not None:
+            parked, release = park
+            parked.set()
+            await release.wait()
+        done.append(name)
+    return close
+
+
+async def test_a_sweep_cancelled_midway_leaves_the_rest_to_closes_sweep():
+    """The last reply call to return closes the clients a switch replaced
+    while it streamed. ``close()`` cancels that voice task while the first of
+    those closes is still running: the closes not yet started must still run,
+    in ``close()``'s own sweep, instead of being dropped with the task."""
+    from main_logic.omni_offline_client._lifecycle import _retire_replaced_clients
+
+    client = _client()
+
+    async def aclose():
+        pass
+
+    client.llm.aclose = aclose
+    park, parked, release = _parked()
+    client.script = [[_text("前半，"), park, _text("后半。"), _text("", "stop")]]
+    client._external_voice_submit_task = None
+    voice = asyncio.create_task(client._run_external_voice_stream("用户说话"))
+    await asyncio.wait_for(parked.wait(), 5)
+
+    done = []
+    closing, never = asyncio.Event(), asyncio.Event()
+    await _retire_replaced_clients(client, [
+        _recorded_closer("first", done, park=(closing, never)),
+        _recorded_closer("second", done),
+    ])
+    assert done == [], "closed while the reply still streams"
+    release.set()
+    await asyncio.wait_for(closing.wait(), 5)  # the reply returned; its sweep runs
+
+    await asyncio.wait_for(client.close(), 5)
+    await asyncio.gather(voice, return_exceptions=True)
+
+    assert done == ["second"]
+    assert client._retired_client_closers == []
+
+
+async def test_a_sweep_leaves_closes_queued_meanwhile_to_the_next_one():
+    """A sweep takes the closes waiting when it starts. A reply call that
+    begins while one of them runs may stream on a client a switch replaces
+    meanwhile; that close waits for the reply to return."""
+    from main_logic.omni_offline_client._lifecycle import _retire_replaced_clients
+
+    client = _client()
+    done = []
+    closing, close_release = asyncio.Event(), asyncio.Event()
+    sweep = asyncio.create_task(_retire_replaced_clients(client, [
+        _recorded_closer("first", done, park=(closing, close_release)),
+    ]))
+    await asyncio.wait_for(closing.wait(), 5)
+
+    park, parked, release = _parked()
+    client.script = [[_text("前半，"), park, _text("后半。"), _text("", "stop")]]
+    reply = asyncio.create_task(client.stream_text("用户说话"))
+    await asyncio.wait_for(parked.wait(), 5)
+    await _retire_replaced_clients(client, [_recorded_closer("second", done)])
+    close_release.set()
+    await asyncio.wait_for(sweep, 5)
+    assert done == ["first"], "closed a client the streaming reply may be reading"
+
+    release.set()
+    await asyncio.wait_for(reply, 5)
+    assert done == ["first", "second"]
+
+
+async def test_a_close_cancelled_in_its_own_sweep_leaves_the_rest_queued():
+    """A second cancellation: the sweep is cancelled midway, ``close()``'s
+    own sweep takes the closes put back, and that close is cancelled in turn.
+    What neither sweep started stays queued, and the next sweep runs it."""
+    from main_logic.omni_offline_client._lifecycle import _retire_replaced_clients
+
+    client = _client()
+
+    async def aclose():
+        pass
+
+    client.llm.aclose = aclose
+    done = []
+    never = asyncio.Event()
+    first_in, second_in = asyncio.Event(), asyncio.Event()
+    sweep = asyncio.create_task(_retire_replaced_clients(client, [
+        _recorded_closer("first", done, park=(first_in, never)),
+        _recorded_closer("second", done, park=(second_in, never)),
+        _recorded_closer("third", done),
+    ]))
+    await asyncio.wait_for(first_in.wait(), 5)
+    sweep.cancel()
+    await asyncio.gather(sweep, return_exceptions=True)
+    assert len(client._retired_client_closers) == 2
+
+    closing = asyncio.create_task(client.close())
+    await asyncio.wait_for(second_in.wait(), 5)
+    closing.cancel()
+    await asyncio.gather(closing, return_exceptions=True)
+    assert len(client._retired_client_closers) == 1
+
+    await asyncio.wait_for(client.close(), 5)
+    assert done == ["third"]
+    assert client._retired_client_closers == []

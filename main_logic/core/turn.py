@@ -399,8 +399,19 @@ class TurnMixin:
           input has split the bubbles), and one that said nothing has no
           bubble to seal.
         - nothing for an unbound reply: it answers no request of its own.
+
+        A bound reply whose turn already ended (``_ReplyTurn.turn_ended``: a
+        final discard sent its turn end while its generation was still live)
+        is not closed again: that discard path runs its own wrap-up, and the
+        frontend already has (or is being sent) its turn end. Only its request
+        id is released, as a close would, should the discard not have reached
+        its own release yet; nothing is owed and nothing returned.
         """
         owner = _taken_over_reply_turn(kind)
+        if owner is not None and owner.turn_ended:
+            if owner.request_id and self._active_text_request_id == owner.request_id:
+                self._active_text_request_id = None
+            return None
         finished = getattr(kind, "finished", False) is True
         taken_over = kind if isinstance(kind, str) else "response"
         is_response = str(taken_over) == "response"
