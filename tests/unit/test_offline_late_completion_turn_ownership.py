@@ -1034,3 +1034,43 @@ async def test_lifecycle_bound_takeover_callbacks_act_only_for_the_installed_cli
     mgr._connection_record(client).retired = True
     assert_left_alone("SUCCESSOR TURN", host_turn("SUCCESSOR TURN"))
     await client.close()
+
+
+@pytest.mark.parametrize("displaced", [False, True])
+async def test_a_takeover_dropped_completion_leaves_no_discard_flag_behind(displaced):
+    """A discarded reply's completion dropped by a session takeover clears
+    its open-turn flag with its text: a later reply that said nothing is
+    then closed without a turn end (only 'turn abandoned' if displaced)."""
+    from main_logic.core._shared import _ReplyTurn
+
+    M = core_module.LLMSessionManager
+    mgr = _make_manager()
+    mgr.websocket = _FakeConnectedWebSocket()
+    mgr._note_ai_turn = lambda text=None, **_kw: None
+    mgr._finalize_turn_after_emit = AsyncMock()
+    mgr._turn_wrap_up_owed = False
+    mgr._discarded_turn_open = False
+
+    a = _ReplyTurn(speech_id=mgr.current_speech_id, request_id="req-A")
+    mgr._active_text_request_id = "req-A"
+    mgr._current_ai_turn_text = "A said half"
+    await M.handle_response_discarded(
+        mgr, "connection", 1, 3, True, None, request_id="req-A", reply_turn=a,
+    )
+    mgr._takeover_active = True
+    await M.handle_response_complete(mgr, reply_turn=a)
+    mgr._takeover_active = False
+    assert mgr._discarded_turn_open is False
+
+    b = _ReplyTurn(speech_id="sid-B", request_id="req-B")
+    mgr._active_text_request_id = "req-B"
+    followup = M._close_taken_over_offline_reply(
+        mgr, InterruptedReply("response", owner=b), displaced=displaced,
+    )
+    if followup is not None:
+        await followup()
+    turn_ends = [
+        m for m in mgr.sync_message_queue.messages
+        if isinstance(m, dict) and str(m.get("data", "")).startswith("turn end")
+    ]
+    assert turn_ends == []

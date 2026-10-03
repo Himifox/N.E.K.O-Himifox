@@ -80,6 +80,7 @@ class TurnMixin:
         # 新一轮开始：清空上一轮 AI 文本累加器（即使上轮 turn end 已清过，
         # proactive abort 等异常路径可能漏清，新轮次起点重置最稳）
         self._current_ai_turn_text = ''
+        self._discarded_turn_open = False
 
         await self.send_user_activity()
 
@@ -937,6 +938,7 @@ class TurnMixin:
             await self._clear_tts_pipeline()
             self._pending_turn_meta = None
             self._current_ai_turn_text = ""
+            self._discarded_turn_open = False
             self._active_text_request_id = None
             return
 

@@ -1586,3 +1586,47 @@ async def test_an_empty_completion_still_reports_no_response():
     client.script = [[_text("", "stop")]] * 3
     await client.stream_text("hi")
     assert _status_codes(client) == ["LLM_NO_RESPONSE"]
+
+
+async def test_a_live_round_finishing_in_another_turns_setup_window_stays_paired():
+    """Reply A's tool returns while typed input B is between saving its user
+    message and beginning its reply (its transcript send): A is still live,
+    so its round completes live, with B's message already after the call.
+    The round is still put back together, so the model keeps seeing a call
+    whose side effects happened, with its result."""
+    release, b_done = asyncio.Event(), asyncio.Event()
+    ran = []
+
+    async def handler(call):
+        await release.wait()
+        ran.append(call.call_id)
+        return ToolResult(call_id=call.call_id, name=call.name, output={"sent": True})
+
+    async def transcript(_t):
+        release.set()
+        await _until(lambda: len(client.requests) >= 2)
+
+    client = _client(handler=handler)
+    client.script = [
+        [_text("我发一下"), _tool_calls("a1")],
+        [b_done.wait, _text("A late"), _text("", "stop")],
+        [_text("B答"), _text("", "stop")],
+        [_text("C答"), _text("", "stop")],
+    ]
+    turn_a = asyncio.create_task(client.stream_text("A"))
+    await _until(lambda: any(
+        isinstance(m, dict) and m.get("tool_calls") for m in client._conversation_history
+    ))
+    await client.stream_text("B", input_transcript_callback=transcript)
+    b_done.set()
+    await turn_a
+    await client.stream_text("C")
+
+    assert ran == ["a1"]
+    shape = _history_shape(client)
+    i_call = next(i for i, s in enumerate(shape) if s[2] == ["a1"])
+    assert shape[i_call + 1][0] == "tool"
+    assert shape.index(("human", "B", None)) > i_call + 1
+    last_request = client.requests[-1]
+    assert [m for m in last_request if isinstance(m, dict) and m.get("tool_calls")]
+    assert [m for m in last_request if isinstance(m, dict) and m.get("role") == "tool"]

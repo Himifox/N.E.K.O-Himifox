@@ -544,7 +544,11 @@ class _ToolingMixin:
             else:
                 round_complete = True
         finally:
-            if not round_complete or not generation_is_active():
+            # A round that completed while its reply was live is settled too:
+            # its results may have landed after a message another turn added
+            # meanwhile, and the request view would otherwise drop the call
+            # and its result for good. Already contiguous, it stays as is.
+            if not round_complete or not generation_is_active() or tool_results:
                 self._settle_unfinished_tool_round(messages, assistant_turn, tool_results)
         live = round_complete and generation_is_active()
         if live:
