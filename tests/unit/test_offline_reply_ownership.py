@@ -2665,15 +2665,15 @@ async def test_a_recovery_without_request_id_taken_over_before_its_loop_sends_no
     session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, None)
     facts, release, holder = {}, asyncio.Event(), {}
     setup, interrupted = _held_typed_input(mgr, session, facts, release)
-    real_clear = mgr._clear_tts_pipeline
+    real_finish = mgr._finish_tts_clear
 
-    async def clear():
+    async def finish(interrupt):
         if "task" not in holder:
             holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
             await interrupted.wait()
-        await real_clear()
+        await real_finish(interrupt)
 
-    mgr._clear_tts_pipeline = clear
+    mgr._finish_tts_clear = finish
     await _drive_final_discard(session, mgr, reply_turn, None)
     after = [(m.get("type"), m.get("data")) for m in mgr.websocket.sent[facts["ws_mark"]:]]
     release.set()
@@ -2733,21 +2733,21 @@ async def test_a_recovery_taken_over_in_its_body_send_still_keeps_the_body_in_hi
 
 
 async def test_a_takeover_in_the_discards_tts_cleanup_still_tells_the_frontend(monkeypatch):
-    """The takeover lands in the discard's TTS cleanup await: cross_server
-    has already dropped the text, so the frontend gets its
-    ``response_discarded`` too, sent before that await."""
+    """The takeover lands in the discard's TTS cleanup await (its finishing
+    half): cross_server has already dropped the text, so the frontend gets
+    its ``response_discarded`` too, sent before that await."""
     session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, "req-A")
     facts, release, holder = {}, asyncio.Event(), {}
     setup, interrupted = _held_typed_input(mgr, session, facts, release)
-    real_clear = mgr._clear_tts_pipeline
+    real_finish = mgr._finish_tts_clear
 
-    async def clear():
+    async def finish(interrupt):
         if "task" not in holder:
             holder["task"] = asyncio.ensure_future(mgr._with_owed_wrap_up_held(setup()))
             await interrupted.wait()
-        await real_clear()
+        await real_finish(interrupt)
 
-    mgr._clear_tts_pipeline = clear
+    mgr._finish_tts_clear = finish
     await _drive_final_discard(session, mgr, reply_turn, "req-A")
     release.set()
     await holder["task"]
@@ -2769,13 +2769,13 @@ async def test_a_discard_taken_over_in_its_frontend_notice_leaves_the_tts_pipeli
     facts, release, holder = {}, asyncio.Event(), {}
     setup, interrupted = _held_typed_input(mgr, session, facts, release)
     clears = []
-    real_clear = mgr._clear_tts_pipeline
+    real_finish = mgr._finish_tts_clear
 
-    async def clear():
+    async def finish(interrupt):
         clears.append("taken_over" in holder)
-        await real_clear()
+        await real_finish(interrupt)
 
-    mgr._clear_tts_pipeline = clear
+    mgr._finish_tts_clear = finish
     real_send_json = mgr.websocket.send_json
 
     async def send_json(payload):
@@ -2792,3 +2792,38 @@ async def test_a_discard_taken_over_in_its_frontend_notice_leaves_the_tts_pipeli
     await _drain()
     assert facts["interrupted"] is True
     assert True not in clears, "no TTS clear after the takeover"
+
+
+async def test_a_final_discard_interrupts_tts_before_telling_the_frontend(monkeypatch):
+    """With a live TTS worker and the discarded reply's audio still queued,
+    the worker is interrupted and that audio dropped before the frontend's
+    ``response_discarded`` goes out: the frontend clears its audio on the
+    notice, and nothing of the discarded reply may arrive after it."""
+    import queue
+
+    class _AliveThread:
+        def is_alive(self):
+            return True
+
+    session, mgr, reply_turn, _depths = _recovery_setup(monkeypatch, "req-A")
+    mgr.tts_thread = _AliveThread()
+    mgr.tts_request_queue = queue.Queue()
+    mgr.tts_response_queue = queue.Queue()
+    mgr.tts_pending_chunks = []
+    mgr.tts_cache_lock = asyncio.Lock()
+    old_sid = mgr.current_speech_id
+    mgr.tts_response_queue.put(("__audio__", old_sid, b"old-audio"))
+    seen = {}
+    real_send_json = mgr.websocket.send_json
+
+    async def send_json(payload):
+        if payload.get("type") == "response_discarded":
+            seen["requests"] = list(mgr.tts_request_queue.queue)
+            seen["responses"] = list(mgr.tts_response_queue.queue)
+        await real_send_json(payload)
+
+    mgr.websocket.send_json = send_json
+    await _drive_final_discard(session, mgr, reply_turn, "req-A")
+    await _drain()
+    assert ("__interrupt__", None) in seen["requests"]
+    assert ("__audio__", old_sid, b"old-audio") not in seen["responses"]

@@ -36,6 +36,8 @@ from tests.unit.test_chat_context_reinjection import (
     _swap,
 )
 from tests.unit.test_core_game_route_memory_contract import (
+    _assert_discard_left_tts_alone,
+    _spy_discard_tts_clear,
     _FakeAliveThread,
     _FakeConnectedWebSocket,
     _FakeQueue,
@@ -274,6 +276,7 @@ async def test_a_retired_clients_discard_leaves_a_new_voice_turn_alone():
     mgr.session = object()
     await mgr.handle_new_message()
     mgr._clear_tts_pipeline.reset_mock()
+    _spy_discard_tts_clear(mgr)
 
     tool_release.set()
     await asyncio.wait_for(turn_a, 5)
@@ -281,6 +284,7 @@ async def test_a_retired_clients_discard_leaves_a_new_voice_turn_alone():
     assert _ws(mgr, "response_discarded") == [], "the frontend would clear V's bubble"
     assert _sync(mgr, "response_discarded_clear") == [], "cross_server would drop V's text"
     mgr._clear_tts_pipeline.assert_not_awaited()
+    _assert_discard_left_tts_alone(mgr)
     assert _ws(mgr, "turn end") == [] and _sync(mgr, "turn end") == []
 
 

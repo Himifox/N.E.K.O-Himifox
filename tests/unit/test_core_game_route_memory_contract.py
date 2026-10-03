@@ -236,6 +236,19 @@ def test_clean_frontend_memory_text_strips_c0_and_c1_controls():
     ) == "hello world"
 
 
+def _spy_discard_tts_clear(mgr):
+    """A discard clears TTS in two halves (``_interrupt_tts_now`` before its
+    frontend notice, ``_finish_tts_clear`` after), not via
+    ``_clear_tts_pipeline``: spy on both."""
+    mgr._interrupt_tts_now = Mock(return_value="tts-interrupt")
+    mgr._finish_tts_clear = AsyncMock()
+
+
+def _assert_discard_left_tts_alone(mgr):
+    mgr._interrupt_tts_now.assert_not_called()
+    mgr._finish_tts_clear.assert_not_awaited()
+
+
 def _make_transcript_manager():
     mgr = _make_manager()
     mgr.session = object()
@@ -2768,13 +2781,13 @@ async def test_text_stream_discard_callback_keeps_original_request_owner(monkeyp
     discard_callback = mgr.session.stream_text.await_args.kwargs["response_discarded_callback"]
     mgr._active_text_request_id = "req-B"
     mgr.websocket = _FakeConnectedWebSocket()
-    mgr._clear_tts_pipeline = AsyncMock()
+    _spy_discard_tts_clear(mgr)
 
     await discard_callback("guard", 1, 3, False, None)
 
     assert mgr.websocket.sent == []
     assert mgr._active_text_request_id == "req-B"
-    mgr._clear_tts_pipeline.assert_not_awaited()
+    _assert_discard_left_tts_alone(mgr)
     assert {
         "type": "system",
         "data": "response_discarded_clear",
@@ -2797,7 +2810,7 @@ async def test_stale_truncated_recovery_does_not_mutate_newer_request_state():
     mgr._active_text_request_id = "req-B"
     mgr.current_speech_id = "speech-B"
     mgr._pending_turn_meta = {"kind": "text", "request_id": "req-B"}
-    mgr._clear_tts_pipeline = AsyncMock()
+    _spy_discard_tts_clear(mgr)
     mgr._emit_turn_end = AsyncMock()
     mgr._finalize_turn_after_emit = AsyncMock()
 
@@ -2816,7 +2829,7 @@ async def test_stale_truncated_recovery_does_not_mutate_newer_request_state():
     assert mgr._pending_turn_meta == {"kind": "text", "request_id": "req-B"}
     assert mgr.session._conversation_history == ["request-B-history"]
     assert mgr.sent_responses == []
-    mgr._clear_tts_pipeline.assert_not_awaited()
+    _assert_discard_left_tts_alone(mgr)
     mgr._emit_turn_end.assert_not_awaited()
     assert mgr.websocket.sent == []
     # Shared-output writes are suppressed, session accounting still runs.
@@ -2981,7 +2994,7 @@ async def test_unowned_discard_callback_keeps_global_clear_behavior():
     """Legacy/proactive discard callbacks still clear shared output globally."""
     mgr = _make_manager()
     mgr._active_text_request_id = "req-current"
-    mgr._clear_tts_pipeline = AsyncMock()
+    _spy_discard_tts_clear(mgr)
 
     await core_module.LLMSessionManager.handle_response_discarded(
         mgr,
@@ -2991,7 +3004,8 @@ async def test_unowned_discard_callback_keeps_global_clear_behavior():
         True,
     )
 
-    mgr._clear_tts_pipeline.assert_awaited_once()
+    mgr._interrupt_tts_now.assert_called_once_with()
+    mgr._finish_tts_clear.assert_awaited_once_with("tts-interrupt")
     assert {
         "type": "system",
         "data": "response_discarded_clear",
