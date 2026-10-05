@@ -114,6 +114,19 @@ test('out-of-order reactions attach to their own messages', async () => {
   assert.deepEqual(Array.from(I.state.messages, m => m.reaction.emoji), ['🤗', '🎉']);
 });
 
+test('accepted late reactions notify export preview after updating the host snapshot', async () => {
+  const { I, window, calls } = fixture();
+  const refreshed = [];
+  window.appChatExport = { refreshMessageReaction(id) {
+    refreshed.push({ id, emoji: I.state.messages.find(m => m.id === id).reaction.emoji });
+  } };
+  I.appendMessage(message());
+  await flush();
+  deliver(calls[0]);
+  await flush();
+  assert.deepEqual(refreshed, [{ id: 'user-1', emoji: '❤️' }]);
+});
+
 for (const change of ['clear', 'restore', 'character', 'edit', 'remove', 'failed']) {
   test(`pending response is ignored after ${change}`, async () => {
     const { I, window, calls } = fixture();

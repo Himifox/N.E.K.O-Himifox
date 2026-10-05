@@ -606,6 +606,20 @@
         return result;
     }
 
+    function getExportReaction(message) {
+        var reaction = message && message.reaction;
+        if (!message || message.role !== 'user' || message.status === 'sending' || message.status === 'failed'
+                || !reaction || typeof reaction.emoji !== 'string' || !reaction.emoji
+                || typeof reaction.author !== 'string' || !reaction.author.trim()) return null;
+        return { emoji: reaction.emoji, author: reaction.author.trim() };
+    }
+
+    function getExportReactionLabel(entry) {
+        return entry.reaction ? translateText(
+            'chat.messageReaction', '{{author}} reacted with {{emoji}}', entry.reaction
+        ) : '';
+    }
+
     function buildExportEntry(message) {
         var role = getRoleLabel(message.role);
         var author = message.author ? String(message.author) : '';
@@ -626,6 +640,7 @@
             time: time,
             header: header,
             rawRole: message.role,
+            reaction: getExportReaction(message),
             avatarUrl: avatarUrl,
             avatarLabel: avatarLabel,
             textContent: extractBlocksPlainText(message),
@@ -729,6 +744,13 @@
             }
             if (entry.markdownContent) {
                 lines.push(entry.markdownContent);
+            }
+            var reactionLabel = getExportReactionLabel(entry);
+            if (reactionLabel) {
+                // Keep character names literal in Markdown instead of creating markup.
+                reactionLabel = reactionLabel.replace(/\\/g, '\\\\')
+                    .replace(/([`*_\[\]<>])/g, '\\$1').replace(/[\r\n]+/g, ' ');
+                lines.push('', '> ' + reactionLabel);
             }
             lines.push('');
         });
@@ -1012,6 +1034,7 @@
                 avatarLabel: entry.avatarLabel,
                 avatarImage: avatarImage,
                 textContent: entry.textContent,
+                reaction: entry.reaction,
                 media: loaded
             });
             if ((i + 1) % 2 === 0) await waitForNextPaint();
@@ -1278,6 +1301,16 @@
                         widthUsed = Math.max(widthUsed, ctx.measureText(line).width);
                     });
                 }
+            });
+        }
+
+        var reactionLabel = getExportReactionLabel(entry);
+        if (reactionLabel) {
+            var reactionLines = wrapTextLines(ctx, reactionLabel, maxWidth);
+            segments.push({ kind: 'note', lines: reactionLines, lineHeight: bodyLineHeight });
+            height += reactionLines.length * bodyLineHeight + 4;
+            reactionLines.forEach(function (line) {
+                widthUsed = Math.max(widthUsed, ctx.measureText(line).width);
             });
         }
 
@@ -2291,6 +2324,11 @@
                     }
                 });
             }
+            var reactionLabel = getExportReactionLabel(entry);
+            if (reactionLabel) {
+                measureCtx.font = noteFont;
+                noteLines = noteLines.concat(wrapTextLines(measureCtx, reactionLabel, textMaxWidth));
+            }
             var imagesHeight = images.reduce(function (sum, image) {
                 return sum + image.height + 12;
             }, 0);
@@ -2581,7 +2619,8 @@
         var locale = document.documentElement.lang || '';
         var theme = isDarkTheme() ? 'dark' : 'light';
         var signature = (entries || []).map(function (entry) {
-            return entry.id + ':' + (entry.textContent || '').length + ':' + (entry.mediaDescriptors ? entry.mediaDescriptors.length : 0);
+            return entry.id + ':' + (entry.textContent || '').length + ':' + (entry.mediaDescriptors ? entry.mediaDescriptors.length : 0)
+                + ':' + JSON.stringify(entry.reaction || null);
         }).join('|');
         var imageStyleId = currentFormatId === 'image' ? getCurrentImageExportStyle().id : '';
         var imageFormatId = currentFormatId === 'image' ? getCurrentImageExportFormat().id : '';
@@ -3062,6 +3101,20 @@
             state.previewModal = createPreviewModal(doc);
         }
         return state.previewModal;
+    }
+
+    function refreshMessageReaction(messageId) {
+        var latest = getReactMessages().find(function (message) { return message.id === messageId; });
+        if (!latest) return;
+        var reaction = getExportReaction(latest);
+        state.allMessages = state.allMessages.map(function (message) {
+            return message.id === messageId
+                ? Object.assign({}, message, { reaction: reaction, status: latest.status }) : message;
+        });
+        if (state.selectedIds && state.selectedIds.has(messageId)
+                && state.previewModal && !state.previewModal.panel.hidden) {
+            schedulePreviewRender();
+        }
     }
 
     function getSelectedEntries() {
@@ -3848,6 +3901,7 @@
     window.appChatExport = {
         open: handleExportButtonClick,
         close: closePreviewModal,
+        refreshMessageReaction: refreshMessageReaction,
         getCompactInlineOptions: getCompactInlineExportOptions,
         buildCompactInlinePreview: buildCompactInlinePreview,
         copyCompactInlineSelection: copyCompactInlineSelection,

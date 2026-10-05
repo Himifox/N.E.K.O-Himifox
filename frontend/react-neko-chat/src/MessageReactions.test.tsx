@@ -95,6 +95,27 @@ describe('MessageReactions', () => {
     expect(row.querySelector('.compact-export-preview-bubble')?.nextElementSibling).toHaveClass('message-reactions');
   });
 
+  it('rebuilds a successful export preview when a selected message receives a late reaction', async () => {
+    let message = userMessage({ reaction: undefined });
+    const onBuildPreview = vi.fn(() => ({
+      previewKind: 'document' as const,
+      previewDocument: message.reaction
+        ? `<p>Hello Neko</p><p>${message.reaction.author} reacted with ${message.reaction.emoji}</p>`
+        : '<p>Hello Neko</p>',
+    }));
+    const props = { ...panelProps([message]), selectedIds: new Set([message.id]), selectedCount: 1,
+      previewOpen: true, onBuildPreview };
+    const { container, rerender } = render(<CompactExportHistoryPanel {...props} />);
+    await waitFor(() => expect(container.querySelector('iframe')).toHaveAttribute('srcdoc', '<p>Hello Neko</p>'));
+    message = userMessage();
+    rerender(<CompactExportHistoryPanel {...props} messages={[message]} />);
+    await waitFor(() => expect(container.querySelector('iframe')).toHaveAttribute(
+      'srcdoc', '<p>Hello Neko</p><p>Neko reacted with ❤️</p>',
+    ));
+    expect(onBuildPreview).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[data-compact-export-preview-message-id]')).toBeNull();
+  });
+
   it.each([
     { role: 'assistant' as const },
     { role: 'system' as const },

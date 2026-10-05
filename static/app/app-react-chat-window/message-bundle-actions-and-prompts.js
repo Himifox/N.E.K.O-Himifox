@@ -2197,6 +2197,9 @@
             var reaction = result.reaction;
             if (!reaction || REACTION_EMOJIS.indexOf(reaction.emoji) < 0 || reaction.author !== name) return;
             I.updateMessage(id, { reaction: { emoji: reaction.emoji, author: name } });
+            if (window.appChatExport && typeof window.appChatExport.refreshMessageReaction === 'function') {
+                window.appChatExport.refreshMessageReaction(id);
+            }
         }).catch(function () {
             // Reactions are optional; leave chat delivery and reply handling alone.
         }).finally(function () {
