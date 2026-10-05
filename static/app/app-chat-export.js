@@ -775,23 +775,26 @@
             escaped.push(escapeHtml(literal));
             return marker + (escaped.length - 1) + ';';
         });
+        function restoreEscapes(value) {
+            return value.replace(new RegExp(marker + '(\\d+);', 'g'), function (_, index) {
+                return escaped[Number(index)];
+            });
+        }
         source = escapeHtml(source);
+        // Validate the final destination; placeholders must not hide its protocol.
         // images first (they look like links) – only emit src/href for safe URLs
         source = source.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (_, alt, url) {
-            var safeUrl = isSafeUrl(url) ? url : '';
+            var safeUrl = isSafeUrl(restoreEscapes(url)) ? url : '';
             return '<img src="' + safeUrl + '" alt="' + alt + '">';
         });
         source = source.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, label, url) {
-            if (!isSafeUrl(url)) return label;
+            if (!isSafeUrl(restoreEscapes(url))) return label;
             return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
         });
         source = source.replace(/`([^`]+)`/g, '<code>$1</code>');
         source = source.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         source = source.replace(/(^|[^\*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-        source = source.replace(new RegExp(marker + '(\\d+);', 'g'), function (_, index) {
-            return escaped[Number(index)];
-        });
-        return source;
+        return restoreEscapes(source);
     }
 
     function renderMarkdownAsHtml(markdownContent) {

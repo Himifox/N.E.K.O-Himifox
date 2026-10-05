@@ -183,9 +183,9 @@ def test_real_tokenizer_keeps_complete_production_prompt_within_budget(harness, 
     state.personas["NEKO"] = content * 2000
     invoke(module, payload(text=(content * 6000)[:6000],
                            context=[{"role": "user", "text": (content * 2000)[:2000]}] * 3))
-    if tokenize.count_tokens(prompt) + 32 >= module.MESSAGE_REACTION_INPUT_MAX_TOKENS:
-        assert not state.factory_calls  # Conservative fallback may not fit the contract.
-        return
+    assert tokenize._get_encoder(tokenize.PERSONA_RENDER_ENCODING) is not None
+    assert tokenize.count_tokens(prompt) + 32 < module.MESSAGE_REACTION_INPUT_MAX_TOKENS
+    assert state.factory_calls
     messages = state.messages[0]
     assert messages[0]["content"] == prompt
     assert sum(tokenize.count_tokens(item["content"]) for item in messages) + 32 <= 2048

@@ -21,8 +21,8 @@ function fixture(messages = [message()]) {
   const errors = [];
   let sequence = 0;
   const host = { messages };
-  const url = { createObjectURL(blob) { const id = `blob:test-${++sequence}`; blobs.set(id, blob); return id; },
-    revokeObjectURL() {} };
+  const url = Object.assign(class extends URL {}, { createObjectURL(blob) { const id = `blob:test-${++sequence}`; blobs.set(id, blob); return id; },
+    revokeObjectURL() {} });
   const document = {
     readyState: 'complete', documentElement: { lang: 'en', getAttribute() { return 'light'; } },
     getElementById() { return null; }, querySelector() { return null; }, body: { appendChild() {} },
@@ -203,3 +203,29 @@ test(`late reactions refresh selected ${format} snapshots and invalidate cached 
   assert.ok((await content(changed)).includes('Other reacted with ❤️'));
 });
 }
+
+for (const destination of ['javascript\\:alert%281%29', 'JaVaScRiPt\\:alert%281%29',
+  'java\tscript\\:alert%281%29', 'vbscript\\:msgbox%281%29']) {
+  for (const prefix of ['', '!']) {
+    test('Markdown preview rejects the final escaped URL ' + prefix + destination, async () => {
+      const text = prefix + '[open](' + destination + ')';
+      const f = fixture([message({ reaction: undefined, blocks: [{ type: 'text', text }] })]);
+      const preview = await f.api.buildCompactInlinePreview({ messageIds: ['user-1'], format: 'markdown' });
+      assert.equal(/(?:href|src)="(?:javascript|vbscript):/i.test(preview.previewDocument), false);
+      assert.ok(preview.previewDocument.includes(prefix ? '<img src="" alt="open">' : '<p>open</p>'));
+      await f.api.copyCompactInlineSelection({ messageIds: ['user-1'], format: 'markdown' });
+      assert.ok(f.clipboard[0].includes(text), 'exported source must remain unchanged');
+    });
+  }
+}
+
+test('safe escaped destinations stay usable and cannot break HTML attributes', async () => {
+  const f = fixture([message({ reaction: undefined, blocks: [{ type: 'text',
+    text: '[safe](https\\://example.com/a?x=1&y=2) ![image](https\\://example.com/a.png) '
+      + '[relative](.\\/notes) [quoted](https\\://example.com/\\"quoted\\")' }] })]);
+  const preview = await f.api.buildCompactInlinePreview({ messageIds: ['user-1'], format: 'markdown' });
+  for (const expected of ['href="https://example.com/a?x=1&amp;y=2"',
+    'src="https://example.com/a.png"', 'href="./notes"', 'href="https://example.com/&quot;quoted&quot;"']) {
+    assert.ok(preview.previewDocument.includes(expected), expected);
+  }
+});
