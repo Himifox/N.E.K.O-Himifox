@@ -1898,6 +1898,7 @@
     }
 
     I.setMessages = function setMessages(messages) {
+        cancelMessageReactions();
         // Compute fallback start past any explicit sortKey in incoming batch
         var maxIncomingSortKey = Array.isArray(messages)
             ? messages.reduce(function (max, message) {
@@ -2118,6 +2119,92 @@
         return I.state.composerAttachments;
     }
 
+    var reactionRequests = new Map();
+    var reactionAttempts = new Set();
+    var REACTION_EMOJIS = ['😊', '😄', '😃', '🙂', '😌', '🤔', '🧐', '💭', '❓', '👍', '✅', '🙌', '💪', '🎉', '🙏', '🤝', '😮', '👀', '⚠️', '💡', '😔', '😢', '😅', '🙇', '🥳', '✨', '🌟', '💻', '🤖', '📚', '🔧', '❤️', '⭐', '🔥', '🚀', '📌', '😂', '🤗'];
+
+    function getReactionCharacterName() {
+        return (window.appState && window.appState.lanlan_name)
+            || (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
+    }
+
+    function getReactionMessageText(message) {
+        return (message.blocks || []).filter(function (block) {
+            return block && block.type === 'text' && typeof block.text === 'string';
+        }).map(function (block) { return block.text; }).join('\n').trim();
+    }
+
+    function cancelMessageReactions() {
+        reactionRequests.forEach(function (request) { request.abort(); });
+        reactionRequests.clear();
+        reactionAttempts.clear();
+    }
+
+    function pruneMessageReactions() {
+        var ids = new Set(I.state.messages.map(function (message) { return message.id; }));
+        reactionAttempts.forEach(function (id) { if (!ids.has(id)) reactionAttempts.delete(id); });
+        reactionRequests.forEach(function (request, id) {
+            if (!ids.has(id)) {
+                request.abort();
+                reactionRequests.delete(id);
+            }
+        });
+    }
+
+    function scheduleMessageReaction(message) {
+        if (!message || message.role !== 'user' || message.status !== 'sent'
+                || message.reaction || reactionAttempts.has(message.id)
+                || reactionRequests.size >= 3 || isYuiGuideChatMessage(message)
+                || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) return;
+        var name = getReactionCharacterName();
+        var text = getReactionMessageText(message);
+        if (!name || !text || typeof fetch !== 'function' || typeof AbortController !== 'function') return;
+        var id = message.id;
+        var index = I.state.messages.findIndex(function (item) { return item.id === id; });
+        var context = I.state.messages.slice(0, index).filter(function (item) {
+            return (item.role === 'user' || item.role === 'assistant')
+                && item.status !== 'failed' && item.status !== 'sending'
+                && item.status !== 'streaming' && getReactionMessageText(item);
+        }).slice(-3).map(function (item) {
+            return { role: item.role, text: getReactionMessageText(item).slice(0, 2000) };
+        });
+        var controller = new AbortController();
+        reactionAttempts.add(id);
+        reactionRequests.set(id, controller);
+        var timeout;
+        var deadline = new Promise(function (resolve) {
+            timeout = setTimeout(function () { controller.abort(); resolve(null); }, 10000);
+        });
+        var request = (async function () {
+            var headers = { 'Content-Type': 'application/json' };
+            var security = window.nekoLocalMutationSecurity;
+            if (security && typeof security.getMutationHeaders === 'function') {
+                Object.assign(headers, await security.getMutationHeaders());
+            }
+            if (controller.signal.aborted) return null;
+            var response = await fetch('/api/chat/reaction', {
+                method: 'POST', headers: headers, signal: controller.signal,
+                body: JSON.stringify({ message_id: id, lanlan_name: name, text: text.slice(0, 6000), context: context })
+            });
+            return response.ok ? response.json() : null;
+        })();
+        Promise.race([request, deadline]).then(function (result) {
+            if (reactionRequests.get(id) !== controller || controller.signal.aborted
+                    || getReactionCharacterName() !== name || !result || result.message_id !== id) return;
+            var current = I.state.messages.find(function (item) { return item.id === id; });
+            if (!current || current.role !== 'user' || current.status !== 'sent'
+                    || getReactionMessageText(current) !== text) return;
+            var reaction = result.reaction;
+            if (!reaction || REACTION_EMOJIS.indexOf(reaction.emoji) < 0 || reaction.author !== name) return;
+            I.updateMessage(id, { reaction: { emoji: reaction.emoji, author: name } });
+        }).catch(function () {
+            // Reactions are optional; leave chat delivery and reply handling alone.
+        }).finally(function () {
+            clearTimeout(timeout);
+            if (reactionRequests.get(id) === controller) reactionRequests.delete(id);
+        });
+    }
+
     var MAX_MESSAGES = 50;
 
     function getNextAppendSortKey() {
@@ -2158,6 +2245,8 @@
             I.invalidatePendingGalgameRequest();
         }
         I.renderWindow();
+        pruneMessageReactions();
+        scheduleMessageReaction(normalized);
         return normalized;
     }
 
@@ -2172,6 +2261,7 @@
 
         I.state.messages = I.sortMessages(I.state.messages);
         I.renderWindow();
+        scheduleMessageReaction(updatedMessage);
         return updatedMessage;
     }
 
@@ -2180,6 +2270,7 @@
         I.state.messages = I.state.messages.filter(function (message) {
             return String(message.id) !== String(messageId);
         });
+        pruneMessageReactions();
         var changed = I.state.messages.length !== beforeLength;
         if (changed) {
             I.renderWindow();
@@ -2207,6 +2298,7 @@
     }
 
     I.clearMessages = function clearMessages() {
+        cancelMessageReactions();
         I.state.messages = [];
         I.state.pendingIcebreakerGalgameHandoffMessageId = '';
         I._sortKeySeq = 0;

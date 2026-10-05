@@ -128,3 +128,9 @@ EMOTION_ANALYSIS_MAX_TOKENS = 40
 """情感分析 LLM 的 max_completion_tokens。
 - 用途：返回情感标签 + score 等短输出。
 - 上游：LLM 输出（注意：Gemini 可能返回 markdown 包裹，留 40 token 余量）。"""
+
+
+# Optional message reactions use the configured emotion model in the background.
+MESSAGE_REACTION_INPUT_MAX_TOKENS = 2048
+MESSAGE_REACTION_OUTPUT_MAX_TOKENS = 256
+MESSAGE_REACTION_TIMEOUT_SECONDS = 8

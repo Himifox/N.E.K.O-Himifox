@@ -97,6 +97,7 @@ from .changelog_survey import (  # noqa: F401
     get_survey,
     submit_survey,
 )
+from .reaction import message_reaction  # noqa: F401
 from .emotion import (  # noqa: F401
     _EMOTION_LABEL_ALIASES,
     _EMOTION_CANONICAL_LABELS,
