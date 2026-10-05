@@ -114,6 +114,55 @@ test('out-of-order reactions attach to their own messages', async () => {
   assert.deepEqual(Array.from(I.state.messages, m => m.reaction.emoji), ['🤗', '🎉']);
 });
 
+test('burst messages wait for available slots without losing or duplicating decisions', async () => {
+  const { I, calls } = fixture();
+  for (let index = 0; index < 8; index++) I.appendMessage(message(`burst-${index}`));
+  await flush();
+  assert.equal(calls.length, 3, 'only three model requests may run concurrently');
+  I.updateMessage('burst-3', { time: '10:01' });
+  for (let index = 0; index < 8; index++) {
+    assert.equal(calls[index].body.message_id, `burst-${index}`);
+    deliver(calls[index], index % 2 ? null : { emoji: '❤️', author: 'Neko' });
+    await flush();
+    assert.equal(calls.length, Math.min(8, index + 4));
+  }
+  assert.equal(new Set(calls.map(call => call.body.message_id)).size, 8);
+  assert.equal(I.state.messages.filter(item => item.reaction).length, 4);
+});
+
+for (const change of ['clear', 'restore', 'character', 'edit', 'remove', 'failed']) {
+  test(`queued reactions are invalidated after ${change}`, async () => {
+    const { I, window, calls } = fixture();
+    for (let index = 0; index < 4; index++) I.appendMessage(message(`queued-${index}`));
+    await flush();
+    assert.equal(calls.length, 3);
+    if (change === 'clear') I.clearMessages();
+    if (change === 'restore') I.setMessages([message('queued-3')]);
+    if (change === 'character') window.appState.lanlan_name = 'Other';
+    if (change === 'edit') I.updateMessage('queued-3', { blocks: [{ type: 'text', text: 'changed' }] });
+    if (change === 'remove') I.removeMessage('queued-3');
+    if (change === 'failed') I.updateMessage('queued-3', { status: 'failed' });
+    for (const call of calls.slice()) deliver(call, null);
+    await flush();
+    assert.equal(calls.length, 3, 'a stale queued message must never reach the model');
+    I.clearMessages();
+  });
+}
+
+test('timeouts release slots for queued messages without starting duplicate requests', async () => {
+  const { I, calls, expire } = fixture();
+  for (let index = 0; index < 4; index++) I.appendMessage(message(`timeout-${index}`));
+  await flush();
+  expire();
+  await flush();
+  assert.equal(calls.length, 4);
+  assert.equal(calls[3].body.message_id, 'timeout-3');
+  assert.ok(calls.slice(0, 3).every(call => call.options.signal.aborted));
+  deliver(calls[3]);
+  await flush();
+  assert.equal(I.state.messages[3].reaction.emoji, '❤️');
+});
+
 test('accepted late reactions notify export preview after updating the host snapshot', async () => {
   const { I, window, calls } = fixture();
   const refreshed = [];

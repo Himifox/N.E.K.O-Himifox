@@ -766,6 +766,15 @@
 
     function renderInlineMarkdown(text) {
         var source = String(text || '');
+        // Protect escaped punctuation until markup parsing is finished, then
+        // restore it as HTML-escaped text. Choose a marker absent from the input.
+        var marker = '\u0000';
+        while (source.indexOf(marker) >= 0) marker += '\u0000';
+        var escaped = [];
+        source = source.replace(/\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])/g, function (_, literal) {
+            escaped.push(escapeHtml(literal));
+            return marker + (escaped.length - 1) + ';';
+        });
         source = escapeHtml(source);
         // images first (they look like links) – only emit src/href for safe URLs
         source = source.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (_, alt, url) {
@@ -779,6 +788,9 @@
         source = source.replace(/`([^`]+)`/g, '<code>$1</code>');
         source = source.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         source = source.replace(/(^|[^\*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+        source = source.replace(new RegExp(marker + '(\\d+);', 'g'), function (_, index) {
+            return escaped[Number(index)];
+        });
         return source;
     }
 
@@ -3840,7 +3852,7 @@
                 showToast('chat.previewOpenBlocked', 'Unable to open a new preview window.', 4000);
                 return;
             }
-            state.allMessages = messages;
+            state.allMessages = getReactMessages();
             state.selectedIds = new Set();
             clearPreviewCache();
             await openPreviewModal(previewWindow);

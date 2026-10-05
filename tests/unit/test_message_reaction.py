@@ -79,12 +79,17 @@ def harness(monkeypatch):
         state.budget_calls.append((text, budget))
         return text[:budget]
 
+    async def count(text):
+        return len(text)
+
     def forbidden(*args, **kwargs):
         pytest.fail("reaction must not mutate normal chat, avatar emotion, or memory")
 
     monkeypatch.setattr(module, "get_config_manager", lambda: Config())
     monkeypatch.setattr(module, "create_chat_llm_async", factory)
     monkeypatch.setattr(module, "atruncate_to_tokens", truncate)
+    monkeypatch.setattr(module, "acount_tokens", count)
+    monkeypatch.setattr(module, "MESSAGE_REACTION_PROMPT", "Choose one emoji or null.")
     monkeypatch.setattr(module, "set_call_type", state.tracked.append)
     monkeypatch.setattr(module, "_validate_local_mutation_request", lambda request: None)
     # A reaction needs only read-only character/model configuration. Session access
@@ -93,7 +98,7 @@ def harness(monkeypatch):
     emotion = importlib.import_module("main_routers.system_router.emotion")
     monkeypatch.setattr(emotion, "_push_emotion_update", forbidden)
     monkeypatch.setattr(module, "_push_emotion_update", forbidden, raising=False)
-    monkeypatch.setattr(module, "MESSAGE_REACTION_INPUT_MAX_TOKENS", 120)
+    monkeypatch.setattr(module, "MESSAGE_REACTION_INPUT_MAX_TOKENS", 2048)
     monkeypatch.setattr(module, "MESSAGE_REACTION_OUTPUT_MAX_TOKENS", 32)
     monkeypatch.setattr(module, "MESSAGE_REACTION_TIMEOUT_SECONDS", 1)
     return module, state
@@ -116,7 +121,7 @@ def test_reuses_emotion_tier_and_preserves_persona_context(harness):
     data = json.loads(messages[1]["content"])
     assert data["companion"] == "NEKO"
     assert data["persona"] == state.personas["NEKO"]
-    assert data["context"] == [{"role": "assistant", "text": "How did yo"}]
+    assert data["context"] == context
     assert data["latest_user_message"] == "I passed!"
     assert state.entered and state.closed
     assert context == [{"role": "assistant", "text": "How did your exam go?"}]
@@ -128,10 +133,63 @@ def test_dynamic_input_sources_are_bounded_separately(harness):
     context = [{"role": "user", "text": "c" * 1000}] * 3
     invoke(module, payload(text="m" * 6000, context=context))
     data = json.loads(state.messages[0][1]["content"])
-    assert data["persona"] == "p" * 30
-    assert [item["text"] for item in data["context"]] == ["c" * 10] * 3
-    assert data["latest_user_message"] == "m" * 60
-    assert all(0 < budget <= 120 for _, budget in state.budget_calls)
+    assert 0 < len(data["persona"]) < 5000
+    assert all(0 < len(item["text"]) < 1000 for item in data["context"])
+    assert 0 < len(data["latest_user_message"]) < 6000
+    assert sum(len(item["content"]) for item in state.messages[0]) + 32 <= 2048
+    assert all(0 < budget <= 2048 for _, budget in state.budget_calls)
+
+
+@pytest.mark.parametrize("content", ["m", "中文🎉", '"\\\n'])
+def test_complete_input_budget_includes_prompt_envelope_and_json_escapes(harness, monkeypatch, content):
+    module, state = harness
+    monkeypatch.setattr(module, "MESSAGE_REACTION_INPUT_MAX_TOKENS", 2048)
+    monkeypatch.setattr(module, "MESSAGE_REACTION_PROMPT", "instructions " * 50)
+
+    async def count(text):
+        return len(text)
+
+    monkeypatch.setattr(module, "acount_tokens", count, raising=False)
+    state.personas["NEKO"] = content * 2000
+    text = (content * 6000)[:6000]
+    context = [{"role": "user", "text": (content * 2000)[:2000]}] * 3
+    assert invoke(module, payload(text=text, context=context))["reaction"] is not None
+    messages = state.messages[0]
+    assert sum(len(item["content"]) for item in messages) + 32 <= 2048
+    data = json.loads(messages[1]["content"])
+    assert data["latest_user_message"] and text.startswith(data["latest_user_message"])
+
+
+def test_unfit_fixed_prompt_skips_model_without_truncating_the_contract(harness, monkeypatch):
+    module, state = harness
+    monkeypatch.setattr(module, "MESSAGE_REACTION_PROMPT", "contract " * 1000)
+
+    async def count(text):
+        return len(text)
+
+    monkeypatch.setattr(module, "acount_tokens", count, raising=False)
+    assert invoke(module, payload())["reaction"] is None
+    assert not state.factory_calls
+
+
+@pytest.mark.parametrize("content", ["中文🙂\"\\\n", "<|endoftext|>"])
+def test_real_tokenizer_keeps_complete_production_prompt_within_budget(harness, monkeypatch, content):
+    module, state = harness
+    tokenize = importlib.import_module("utils.tokenize")
+    prompt = importlib.import_module("config.prompts.prompts_reaction").MESSAGE_REACTION_PROMPT
+    monkeypatch.setattr(module, "MESSAGE_REACTION_PROMPT", prompt)
+    monkeypatch.setattr(module, "acount_tokens", tokenize.acount_tokens)
+    monkeypatch.setattr(module, "atruncate_to_tokens", tokenize.atruncate_to_tokens)
+    state.personas["NEKO"] = content * 2000
+    invoke(module, payload(text=(content * 6000)[:6000],
+                           context=[{"role": "user", "text": (content * 2000)[:2000]}] * 3))
+    if tokenize.count_tokens(prompt) + 32 >= module.MESSAGE_REACTION_INPUT_MAX_TOKENS:
+        assert not state.factory_calls  # Conservative fallback may not fit the contract.
+        return
+    messages = state.messages[0]
+    assert messages[0]["content"] == prompt
+    assert sum(tokenize.count_tokens(item["content"]) for item in messages) + 32 <= 2048
+    assert json.loads(messages[1]["content"])["latest_user_message"]
 
 
 @pytest.mark.parametrize("emoji", ["😊", "😄", "😃", "🙂", "😌", "🤔", "🧐", "💭", "❓", "👍", "✅", "🙌", "💪", "🎉", "🙏", "🤝", "😮", "👀", "⚠️", "💡", "😔", "😢", "😅", "🙇", "🥳", "✨", "🌟", "💻", "🤖", "📚", "🔧", "❤️", "⭐", "🔥", "🚀", "📌", "😂", "🤗"])

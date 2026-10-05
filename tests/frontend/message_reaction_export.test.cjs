@@ -62,7 +62,9 @@ function fixture(messages = [message()]) {
   });
   // Expose private state only in the test VM; run the production exporter unchanged otherwise.
   vm.runInContext(source.replace('    window.appChatExport = {',
-    '    window.testExport = { state, buildExportEntry, getSelectedEntries, getOrBuildPreviewPayload };\n    window.appChatExport = {'), context);
+    '    window.testExport = { state, buildExportEntry, getSelectedEntries, getOrBuildPreviewPayload, '
+      + 'setPreviewFunctions(open, modal) { openExportPreviewWindow = open; openPreviewModal = modal; } };\n'
+      + '    window.appChatExport = {'), context);
   return { api: window.appChatExport, internal: window.testExport, host, blobs, downloads, clipboard, frames, errors };
 }
 
@@ -125,6 +127,50 @@ test('reaction author is escaped in Markdown without modifying the original mess
   await f.api.copyCompactInlineSelection({ messageIds: ['user-1'], format: 'markdown' });
   assert.ok(f.clipboard[0].includes('> \\*Neko\\* \\<img\\> reacted with ❤️'));
   assert.ok(f.clipboard[0].includes(body));
+});
+
+for (const [author, rendered] of [
+  ['*Neko*', '*Neko*'],
+  ['`Neko`', '`Neko`'],
+  ['[Neko](https://example.com)', '[Neko](https://example.com)'],
+  ['<img src=x onerror=alert(1)>', '&lt;img src=x onerror=alert(1)&gt;'],
+  ['\\Neko', '\\Neko'],
+  ['**Neko** _friend_', '**Neko** _friend_'],
+]) {
+  test(`normal Markdown preview preserves the literal reaction author ${author}`, async () => {
+    const f = fixture([message({ reaction: { emoji: '❤️', author } })]);
+    const preview = await f.api.buildCompactInlinePreview({ messageIds: ['user-1'], format: 'markdown' });
+    assert.ok(preview.previewDocument.includes(`<blockquote>${rendered} reacted with ❤️</blockquote>`));
+    assert.ok(preview.previewDocument.includes(body));
+  });
+}
+
+test('Markdown escapes stay literal inside normal formatting and do not become links or HTML', async () => {
+  const f = fixture([message({ reaction: undefined, blocks: [{ type: 'text',
+    text: '**bold \\* literal** and \\[link](https://example.com) and \\<script\\>' }] })]);
+  const preview = await f.api.buildCompactInlinePreview({ messageIds: ['user-1'], format: 'markdown' });
+  assert.ok(preview.previewDocument.includes('<strong>bold * literal</strong>'));
+  assert.ok(preview.previewDocument.includes('[link](https://example.com)'));
+  assert.ok(preview.previewDocument.includes('&lt;script&gt;'));
+  assert.equal(preview.previewDocument.includes('<a href="https://example.com"'), false);
+});
+
+test('opening the export window keeps a reaction received while the popup was loading', async () => {
+  const f = fixture([message({ reaction: undefined })]);
+  let finishOpening;
+  const opened = new Promise(resolve => { finishOpening = resolve; });
+  f.internal.state.allMessages = f.host.messages.slice();
+  f.internal.setPreviewFunctions(() => opened, async () => {});
+  const opening = f.api.open();
+  f.host.messages = [message()];
+  f.api.refreshMessageReaction('user-1');
+  finishOpening({});
+  await opening;
+  assert.equal(f.internal.state.allMessages[0].reaction.emoji, '❤️');
+  f.internal.state.selectedIds = new Set(['user-1']);
+  const preview = await f.internal.getOrBuildPreviewPayload(f.internal.getSelectedEntries(), 'markdown');
+  assert.ok(preview.previewDocument.includes(label));
+  assert.equal(f.errors.length, 0);
 });
 
 for (const format of ['markdown', 'image']) {

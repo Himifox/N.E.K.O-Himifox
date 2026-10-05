@@ -2121,6 +2121,7 @@
 
     var reactionRequests = new Map();
     var reactionAttempts = new Set();
+    var reactionQueue = new Map();
     var REACTION_EMOJIS = ['😊', '😄', '😃', '🙂', '😌', '🤔', '🧐', '💭', '❓', '👍', '✅', '🙌', '💪', '🎉', '🙏', '🤝', '😮', '👀', '⚠️', '💡', '😔', '😢', '😅', '🙇', '🥳', '✨', '🌟', '💻', '🤖', '📚', '🔧', '❤️', '⭐', '🔥', '🚀', '📌', '😂', '🤗'];
 
     function getReactionCharacterName() {
@@ -2138,23 +2139,39 @@
         reactionRequests.forEach(function (request) { request.abort(); });
         reactionRequests.clear();
         reactionAttempts.clear();
+        reactionQueue.clear();
     }
 
     function pruneMessageReactions() {
         var ids = new Set(I.state.messages.map(function (message) { return message.id; }));
         reactionAttempts.forEach(function (id) { if (!ids.has(id)) reactionAttempts.delete(id); });
+        reactionQueue.forEach(function (_, id) { if (!ids.has(id)) reactionQueue.delete(id); });
         reactionRequests.forEach(function (request, id) {
             if (!ids.has(id)) {
                 request.abort();
                 reactionRequests.delete(id);
             }
         });
+        drainMessageReactions();
+    }
+
+    function drainMessageReactions() {
+        while (reactionRequests.size < 3 && reactionQueue.size > 0) {
+            var pending = reactionQueue.values().next().value;
+            reactionQueue.delete(pending.id);
+            var current = I.state.messages.find(function (item) { return item.id === pending.id; });
+            if (!current || current.role !== 'user' || current.status !== 'sent' || current.reaction
+                    || isYuiGuideChatMessage(current)
+                    || getReactionCharacterName() !== pending.name || getReactionMessageText(current) !== pending.text
+                    || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) continue;
+            startMessageReaction(pending);
+        }
     }
 
     function scheduleMessageReaction(message) {
         if (!message || message.role !== 'user' || message.status !== 'sent'
                 || message.reaction || reactionAttempts.has(message.id)
-                || reactionRequests.size >= 3 || isYuiGuideChatMessage(message)
+                || isYuiGuideChatMessage(message)
                 || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) return;
         var name = getReactionCharacterName();
         var text = getReactionMessageText(message);
@@ -2168,8 +2185,17 @@
         }).slice(-3).map(function (item) {
             return { role: item.role, text: getReactionMessageText(item).slice(0, 2000) };
         });
-        var controller = new AbortController();
         reactionAttempts.add(id);
+        reactionQueue.set(id, { id: id, name: name, text: text, context: context });
+        drainMessageReactions();
+    }
+
+    function startMessageReaction(pending) {
+        var id = pending.id;
+        var name = pending.name;
+        var text = pending.text;
+        var context = pending.context;
+        var controller = new AbortController();
         reactionRequests.set(id, controller);
         var timeout;
         var deadline = new Promise(function (resolve) {
@@ -2205,6 +2231,7 @@
         }).finally(function () {
             clearTimeout(timeout);
             if (reactionRequests.get(id) === controller) reactionRequests.delete(id);
+            drainMessageReactions();
         });
     }
 
