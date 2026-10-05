@@ -127,6 +127,7 @@ def test_local_bridge_accepts_only_supported_local_origins(monkeypatch):
 
     def request(origin: str):
         return SimpleNamespace(
+            scope={},
             headers={"host": "127.0.0.1:48910", "origin": origin},
             client=SimpleNamespace(host="::1"),
         )
@@ -168,6 +169,7 @@ def test_packaged_bridge_rejects_the_vite_dev_origin(monkeypatch):
 
     def request(origin: str):
         return SimpleNamespace(
+            scope={},
             headers={"host": "127.0.0.1:48910", "origin": origin},
             client=SimpleNamespace(host="127.0.0.1"),
         )
@@ -302,6 +304,7 @@ async def test_packaged_proxy_uses_knowledge_budgets_and_stable_timeout(monkeypa
 
     def request(method: str):
         return SimpleNamespace(
+            scope={},
             method=method,
             url=SimpleNamespace(query=""),
             headers={"content-type": "application/json"},

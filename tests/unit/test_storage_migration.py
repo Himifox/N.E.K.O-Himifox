@@ -206,6 +206,14 @@ def test_run_pending_storage_migration_commits_policy_and_copies_runtime_entries
     source_root = config_manager.app_docs_dir
     target_root = tmp_path / "target-selected" / "N.E.K.O"
 
+    theater_files = ["numeric_v2/packages/story.json", "numeric_v2/sessions/session.json",
+                     "numeric_v2/end_receipts/receipt.json", "numeric_v2/public_archives/archive.json",
+                     "workshop/projects/author.json", "numeric_v2/forget_transactions/pending.json"]
+    for relative in theater_files:
+        path = source_root / "theater" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative, encoding="utf-8")
+
     (source_root / "config").mkdir(parents=True, exist_ok=True)
     (source_root / "memory" / "A").mkdir(parents=True, exist_ok=True)
     (source_root / "card_faces").mkdir(parents=True, exist_ok=True)
@@ -235,6 +243,9 @@ def test_run_pending_storage_migration_commits_policy_and_copies_runtime_entries
     assert result["payload"]["status"] == STORAGE_MIGRATION_STATUS_COMPLETED
     assert result["payload"]["retained_source_root"] == str(source_root.resolve())
     assert result["payload"]["retained_source_mode"] == "manual_retention"
+    for relative in theater_files:
+        assert (target_root / "theater" / relative).read_text(encoding="utf-8") == relative
+        assert (source_root / "theater" / relative).read_text(encoding="utf-8") == relative
     assert (target_root / "config" / "characters.json").read_text(encoding="utf-8") == '{"current":"A"}'
     assert (target_root / "config" / "plugin_models.json").read_text(encoding="utf-8") == plugin_models
     assert (source_root / "config" / "plugin_models.json").read_text(encoding="utf-8") == plugin_models
@@ -494,6 +505,22 @@ def test_storage_migration_rejects_nested_links_without_following(tmp_path):
     assert result["error_code"] == "path_link_unsupported"
     assert (external / "sentinel.txt").read_text(encoding="utf-8") == "keep"
     assert not (target_root / "knowledge").exists()
+
+
+@pytest.mark.unit
+def test_migration_requires_confirmation_when_target_only_contains_theater(tmp_path):
+    from utils.cloudsave_runtime import runtime_root_has_user_content
+    config = _make_config_manager(tmp_path)
+    config.app_docs_dir.mkdir(parents=True)
+    target = tmp_path / "target" / "N.E.K.O"
+    saved = target / "theater" / "numeric_v2" / "sessions" / "existing.json"
+    saved.parent.mkdir(parents=True)
+    saved.write_text('{"existing": true}', encoding="utf-8")
+    assert runtime_root_has_user_content(target, config_manager=config)
+    create_pending_storage_migration(config, source_root=config.app_docs_dir, target_root=target, selection_source="custom")
+    result = run_pending_storage_migration(config)
+    assert result["error_code"] == "target_confirmation_required"
+    assert saved.read_text(encoding="utf-8") == '{"existing": true}'
 
 
 @pytest.mark.unit
