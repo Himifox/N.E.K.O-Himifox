@@ -176,6 +176,8 @@ def test_unfit_fixed_prompt_skips_model_without_truncating_the_contract(harness,
 def test_real_tokenizer_keeps_complete_production_prompt_within_budget(harness, monkeypatch, content):
     module, state = harness
     tokenize = importlib.import_module("utils.tokenize")
+    if tokenize._get_encoder(tokenize.PERSONA_RENDER_ENCODING) is None:
+        pytest.skip("Real tokenizer encoding is unavailable; fallback is tested separately")
     prompt = importlib.import_module("config.prompts.prompts_reaction").MESSAGE_REACTION_PROMPT
     monkeypatch.setattr(module, "MESSAGE_REACTION_PROMPT", prompt)
     monkeypatch.setattr(module, "acount_tokens", tokenize.acount_tokens)
@@ -183,13 +185,37 @@ def test_real_tokenizer_keeps_complete_production_prompt_within_budget(harness, 
     state.personas["NEKO"] = content * 2000
     invoke(module, payload(text=(content * 6000)[:6000],
                            context=[{"role": "user", "text": (content * 2000)[:2000]}] * 3))
-    assert tokenize._get_encoder(tokenize.PERSONA_RENDER_ENCODING) is not None
     assert tokenize.count_tokens(prompt) + 32 < module.MESSAGE_REACTION_INPUT_MAX_TOKENS
     assert state.factory_calls
     messages = state.messages[0]
     assert messages[0]["content"] == prompt
     assert sum(tokenize.count_tokens(item["content"]) for item in messages) + 32 <= 2048
     assert json.loads(messages[1]["content"])["latest_user_message"]
+
+
+@pytest.mark.parametrize("fits", [True, False])
+def test_missing_encoding_bounds_input_or_declines_an_unfit_fixed_prompt(harness, monkeypatch, fits):
+    module, state = harness
+    tokenize = importlib.import_module("utils.tokenize")
+    monkeypatch.setitem(tokenize._ENCODERS, tokenize.PERSONA_RENDER_ENCODING, None)
+    monkeypatch.setattr(module, "acount_tokens", tokenize.acount_tokens)
+    monkeypatch.setattr(module, "atruncate_to_tokens", tokenize.atruncate_to_tokens)
+    prompt = "Choose an emoji or null." if fits else "contract " * 1000
+    monkeypatch.setattr(module, "MESSAGE_REACTION_PROMPT", prompt)
+    content = '中文🙂"\\\n' * 500
+    state.personas["NEKO"] = content
+    result = invoke(module, payload(text=content, context=[{"role": "user", "text": content[:2000]}] * 3))
+    if not fits:
+        assert result["reaction"] is None
+        assert not state.factory_calls
+        return
+    assert state.factory_calls
+    assert result["reaction"] == {"emoji": "🎉", "author": "NEKO"}
+    messages = state.messages[0]
+    assert messages[0]["content"] == prompt
+    assert sum(tokenize.count_tokens(item["content"]) for item in messages) + 32 <= 2048
+    data = json.loads(messages[1]["content"])
+    assert data["latest_user_message"] and content.startswith(data["latest_user_message"])
 
 
 @pytest.mark.parametrize("emoji", ["😊", "😄", "😃", "🙂", "😌", "🤔", "🧐", "💭", "❓", "👍", "✅", "🙌", "💪", "🎉", "🙏", "🤝", "😮", "👀", "⚠️", "💡", "😔", "😢", "😅", "🙇", "🥳", "✨", "🌟", "💻", "🤖", "📚", "🔧", "❤️", "⭐", "🔥", "🚀", "📌", "😂", "🤗"])
