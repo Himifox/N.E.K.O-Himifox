@@ -345,6 +345,52 @@ async def test_packaged_proxy_uses_knowledge_budgets_and_stable_timeout(monkeypa
     assert attempts == 3
 
 
+@pytest.mark.asyncio
+async def test_packaged_proxy_reports_knowledge_read_timeouts_with_the_bridge_code(
+    monkeypatch,
+):
+    """Packaged (proxied) and dev (direct) knowledge reads time out alike."""
+    from app.main_server import web_app as module
+
+    class TimingOutClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def request(self, *_args, **_kwargs):
+            raise httpx.ReadTimeout("fixture timeout")
+
+    async def body():
+        return b""
+
+    def request(method: str):
+        return SimpleNamespace(
+            scope={},
+            method=method,
+            url=SimpleNamespace(query=""),
+            headers={},
+            body=body,
+        )
+
+    monkeypatch.setattr(module, "_resolve_user_plugin_base", lambda: "http://127.0.0.1:48910")
+    monkeypatch.setattr(module.httpx, "AsyncClient", TimingOutClient)
+
+    knowledge_read = await module.proxy_user_plugin_market_bridge(
+        request("GET"), "knowledge/status"
+    )
+    ordinary_read = await module.proxy_user_plugin_market_bridge(request("GET"), "status")
+
+    assert knowledge_read.status_code == 504
+    assert knowledge_read.body == b'{"detail":{"code":"knowledge_request_timeout"}}'
+    assert ordinary_read.status_code == 504
+    assert ordinary_read.body == b'{"detail":"Market bridge timeout"}'
+
+
 def test_bridge_token_error_uses_stable_code():
     from plugin.server.routes import market_bridge as module
 

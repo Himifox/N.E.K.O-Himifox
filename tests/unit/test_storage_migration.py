@@ -391,12 +391,27 @@ def test_v1_knowledge_repair_into_an_empty_target_fails_before_publishing(tmp_pa
         },
     )
 
+    policy_before = load_storage_policy(config_manager)
+    root_state_before = config_manager.load_root_state()
+
     result = run_pending_storage_migration(config_manager)
 
     assert result["completed"] is False
-    assert result["error_code"] == "target_missing_runtime"
+    # The user has been running on the target since the v1 migration: a
+    # failed knowledge repair stays retryable and never switches back.
+    assert result["error_code"] == "knowledge_migration_repair_required"
+    assert "目标路径没有可用数据" in result["error_message"]
     assert not (target_root / "knowledge").exists()
     assert not (target_root / ".smtx").exists()
+    policy_after = load_storage_policy(config_manager)
+    assert policy_after == policy_before
+    assert not (
+        isinstance(policy_after, dict)
+        and str(policy_after.get("selected_root") or "") == str(source_root)
+    )
+    root_state_after = config_manager.load_root_state()
+    assert root_state_after.get("current_root") == root_state_before.get("current_root")
+    assert not str(root_state_after.get("last_migration_result") or "").startswith("failed:")
 
 
 @pytest.mark.unit

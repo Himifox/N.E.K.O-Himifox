@@ -957,6 +957,22 @@ def run_pending_storage_migration(
         }
 
     transaction_root: Path | None = None
+    repairing_v1_knowledge = False
+
+    def _finish_repair_or_failure(error_code: str, error_message: str) -> dict[str, Any]:
+        # A v1 knowledge repair runs on a target the user has already been
+        # using since that v1 migration. Failing it must not switch policy and
+        # root_state back to the old source: whatever was written to the
+        # target since would vanish. Leave the checkpoint retryable instead;
+        # only the knowledge entry is at stake.
+        if repairing_v1_knowledge:
+            if error_code not in {
+                "knowledge_mutation_busy",
+                "migration_rollback_required",
+            }:
+                error_code = "knowledge_migration_repair_required"
+            return _finish_retryable(error_code, error_message)
+        return _finish_failure(error_code, error_message)
 
     def _cleanup_unpublished_transaction() -> None:
         if transaction_root is None:
@@ -1273,12 +1289,12 @@ def run_pending_storage_migration(
             "migration_rollback_required",
         }:
             return _finish_retryable(exc.error_code, exc.message)
-        return _finish_failure(exc.error_code, exc.message)
+        return _finish_repair_or_failure(exc.error_code, exc.message)
     except Exception as exc:
         _cleanup_unpublished_transaction()
         logger.exception("Unexpected storage migration failure")
         wrapped_exc = StorageMigrationError("storage_migration_unexpected", f"执行存储迁移时发生未预期错误: {exc}")
-        return _finish_failure(wrapped_exc.error_code, wrapped_exc.message)
+        return _finish_repair_or_failure(wrapped_exc.error_code, wrapped_exc.message)
     finally:
         barrier_stack.close()
 

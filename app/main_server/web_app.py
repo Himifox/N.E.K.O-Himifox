@@ -748,6 +748,13 @@ async def proxy_user_plugin_market_bridge(request: Request, path: str = ""):
                 status_code=504,
                 content={"detail": {"code": "knowledge_mutation_timeout"}},
             )
+        if is_knowledge_path:
+            # Same code the plugin bridge returns, so a knowledge read times
+            # out the same way with or without this proxy in front of it.
+            return JSONResponse(
+                status_code=504,
+                content={"detail": {"code": "knowledge_request_timeout"}},
+            )
         return JSONResponse(
             status_code=504,
             content={"detail": "Market bridge timeout"},
