@@ -231,7 +231,6 @@ def test_allowlisted_reactions(harness, emoji):
     '```json\n{"emoji":"🎉"}\n```',
     '```JSON\r\n{"emoji":"🎉"}\r\n```',
     '```\n{"emoji":"🎉"}\n```',
-    'Here is my choice:\n```json\n{"emoji":"🎉"}\n```',
 ])
 def test_fenced_model_json_is_parsed(harness, response):
     module, state = harness
@@ -279,6 +278,10 @@ def test_reaction_candidates_agree_across_prompt_backend_host_and_schema():
     '```json\n{"emoji":"😀"}\n```', '```json\n{"emoji":null}\n```',
     '```json\n{broken}\n```',
     '[{"emoji":"🎉"}]', 'Here is my choice:\n```json\n{"emoji":"😀"}\n```',
+    'Here is my choice:\n```json\n{"emoji":"🎉"}\n```',
+    'Do not react. For example, {"emoji":"🎉"} is inappropriate here.',
+    'Do not react.\n```json\n{"emoji":"🎉"}\n```',
+    '{"emoji":"🎉"}\nThis is only an example, do not react.',
 ])
 def test_invalid_or_declined_model_output_is_no_reaction(harness, response):
     module, state = harness

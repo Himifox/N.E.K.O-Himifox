@@ -14,7 +14,7 @@ from config import (
 )
 from config.prompts.prompts_reaction import MESSAGE_REACTION_PROMPT
 from utils.file_utils import robust_json_loads
-from utils.icebreaker_free_text import extract_first_json_object, strip_json_fence
+from utils.icebreaker_free_text import strip_json_fence
 from utils.llm_client import create_chat_llm_async
 from utils.tokenize import acount_tokens, atruncate_to_tokens
 from utils.token_tracker import set_call_type
@@ -87,14 +87,9 @@ async def _choose_message_reaction(payload: MessageReactionRequest):
     )
     async with llm:
         result = await llm.ainvoke(messages)
-    raw = strip_json_fence(result.content)
-    try:
-        parsed = robust_json_loads(raw)
-    except (ValueError, TypeError):
-        extracted = extract_first_json_object(raw)
-        if extracted is None:
-            return None
-        parsed = robust_json_loads(extracted)
+    # Explanatory text can contain examples rather than the chosen reaction.
+    # Accept only a complete JSON response, optionally wrapped in a code fence.
+    parsed = robust_json_loads(strip_json_fence(result.content))
     if not isinstance(parsed, dict):
         return None
     emoji = parsed.get("emoji")

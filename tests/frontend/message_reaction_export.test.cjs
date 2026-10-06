@@ -277,3 +277,21 @@ test('safe escaped destinations stay usable and cannot break HTML attributes', a
     assert.ok(preview.previewDocument.includes(expected), expected);
   }
 });
+
+for (const destination of ['https://example.com/`foo`', 'https://example.com/``foo``',
+  'https://example.com/`a"b`', './`notes`']) {
+  for (const prefix of ['', '!']) {
+    test('code delimiters stay literal in URL: ' + prefix + destination, async () => {
+      const text = prefix + '[open](' + destination + ') and `real code`';
+      const f = fixture([message({ blocks: [{ type: 'text', text }] })]);
+      const options = { messageIds: ['user-1'], format: 'markdown' };
+      const preview = await f.api.buildCompactInlinePreview(options);
+      const escaped = destination.replace(/"/g, '&quot;');
+      assert.ok(preview.previewDocument.includes((prefix ? 'src' : 'href') + '="' + escaped + '"'));
+      assert.ok(preview.previewDocument.includes('<code>real code</code>'));
+      assert.equal(/(?:href|src)="[^"]*<code>/.test(preview.previewDocument), false);
+      await f.api.copyCompactInlineSelection(options);
+      assert.ok(f.clipboard[0].includes(text));
+    });
+  }
+}

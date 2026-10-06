@@ -799,28 +799,31 @@
             var backslashes = 0;
             for (var cursor = offset - 1; cursor >= 0 && source.charAt(cursor) === '\\'; cursor -= 1) backslashes += 1;
             if (backslashes % 2) return match;
-            escaped.push('<code>' + escapeHtml(content) + '</code>');
+            escaped.push({ html: '<code>' + escapeHtml(content) + '</code>', literal: escapeHtml(match) });
             return marker + (escaped.length - 1) + ';';
         });
         source = source.replace(/\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])/g, function (_, literal) {
             escaped.push(escapeHtml(literal));
             return marker + (escaped.length - 1) + ';';
         });
-        function restoreEscapes(value) {
+        function restoreEscapes(value, literalCode) {
             return value.replace(new RegExp(marker + '(\\d+);', 'g'), function (_, index) {
-                return escaped[Number(index)];
+                var item = escaped[Number(index)];
+                return typeof item === 'string' ? item : (literalCode ? item.literal : item.html);
             });
         }
         source = escapeHtml(source);
         // Validate the final destination; placeholders must not hide its protocol.
         // images first (they look like links) – only emit src/href for safe URLs
         source = source.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (_, alt, url) {
-            var safeUrl = isSafeUrl(restoreEscapes(url)) ? url : '';
+            var destination = restoreEscapes(url, true);
+            var safeUrl = isSafeUrl(destination) ? destination : '';
             return '<img src="' + safeUrl + '" alt="' + alt + '">';
         });
         source = source.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, label, url) {
-            if (!isSafeUrl(restoreEscapes(url))) return label;
-            return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+            var destination = restoreEscapes(url, true);
+            if (!isSafeUrl(destination)) return label;
+            return '<a href="' + destination + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
         });
         source = source.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         source = source.replace(/(^|[^\*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
