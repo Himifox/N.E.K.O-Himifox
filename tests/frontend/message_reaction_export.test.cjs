@@ -174,6 +174,35 @@ for (const [text, expected] of [
   });
 }
 
+for (const fence of ['```', '````', '~~~']) {
+  test('unfinished ' + fence + ' fence is closed before reaction and the next message', async () => {
+    const text = 'Here:\n' + fence + 'python\ndef f():\n\\d+\\.\\d+';
+    const f = fixture([
+      message({ id: 'first', blocks: [{ type: 'text', text }] }),
+      message({ id: 'second', blocks: [{ type: 'text', text: 'thanks!' }] }),
+    ]);
+    const options = { messageIds: ['first', 'second'], format: 'markdown' };
+    const preview = await f.api.buildCompactInlinePreview(options);
+    assert.ok(preview.previewDocument.includes('<pre><code>def f():\n\\d+\\.\\d+</code></pre>'));
+    assert.ok(preview.previewDocument.includes('<p>thanks!</p>'));
+    assert.equal(preview.previewDocument.match(/<h2>/g).length, 2);
+    assert.equal(preview.previewDocument.match(/<blockquote>/g).length, 2);
+    await f.api.copyCompactInlineSelection(options);
+    await f.api.downloadCompactInlineSelection(options);
+    for (const markdown of [f.clipboard[0], await f.downloads[0].text()]) {
+      assert.ok(markdown.includes(text + '\n' + fence + '\n\n> ' + label));
+      assert.ok(markdown.includes('thanks!'));
+    }
+  });
+}
+
+test('already closed fences remain unchanged in downloaded Markdown', async () => {
+  const text = '````python\n```\ncode\n````';
+  const f = fixture([message({ blocks: [{ type: 'text', text }] })]);
+  await f.api.copyCompactInlineSelection({ messageIds: ['user-1'], format: 'markdown' });
+  assert.ok(f.clipboard[0].includes(text + '\n\n> ' + label));
+});
+
 test('opening the export window keeps a reaction received while the popup was loading', async () => {
   const f = fixture([message({ reaction: undefined })]);
   let finishOpening;

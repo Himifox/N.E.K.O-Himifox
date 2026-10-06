@@ -743,7 +743,8 @@
                 lines.push('## ' + headerParts.join(' · '));
             }
             if (entry.markdownContent) {
-                lines.push(entry.markdownContent);
+                // A truncated reply must not absorb the next message or reaction.
+                lines.push(closeUnfinishedMarkdownFence(entry.markdownContent));
             }
             var reactionLabel = getExportReactionLabel(entry);
             if (reactionLabel) {
@@ -763,6 +764,26 @@
     }
 
     // ======================== Markdown → HTML (preview) ========================
+
+    function getOpeningCodeFence(line) {
+        var match = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+        return match && (match[1][0] !== '`' || match[2].indexOf('`') < 0) ? match[1] : null;
+    }
+
+    function isClosingCodeFence(line, fence) {
+        var match = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+        return match && match[1][0] === fence[0] && match[1].length >= fence.length;
+    }
+
+    function closeUnfinishedMarkdownFence(content) {
+        var fence = null;
+        String(content).split(/\r?\n/).forEach(function (line) {
+            if (fence) {
+                if (isClosingCodeFence(line, fence)) fence = null;
+            } else fence = getOpeningCodeFence(line);
+        });
+        return fence ? content + '\n' + fence : content;
+    }
 
     function renderInlineMarkdown(text) {
         var source = String(text || '');
@@ -832,16 +853,14 @@
         for (var i = 0; i < lines.length; i += 1) {
             var line = lines[i];
             if (codeFence) {
-                var closingFence = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
-                if (closingFence && closingFence[1][0] === codeFence[0]
-                        && closingFence[1].length >= codeFence.length) flushCode();
+                if (isClosingCodeFence(line, codeFence)) flushCode();
                 else codeLines.push(line);
                 continue;
             }
-            var openingFence = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
-            if (openingFence && (openingFence[1][0] !== '`' || openingFence[2].indexOf('`') < 0)) {
+            var openingFence = getOpeningCodeFence(line);
+            if (openingFence) {
                 flushParagraph(); closeList();
-                codeFence = openingFence[1];
+                codeFence = openingFence;
                 continue;
             }
             if (line.trim() === '') { flushParagraph(); closeList(); continue; }
