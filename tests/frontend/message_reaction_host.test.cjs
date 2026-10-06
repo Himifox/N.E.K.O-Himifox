@@ -97,6 +97,7 @@ test('non-user, failed, image-only, tutorial and local cat messages never call t
   I.appendMessage(message('failed', { status: 'failed' }));
   I.appendMessage(message('image', { blocks: [{ type: 'image', url: '/image.png' }] }));
   I.appendMessage(message('yui-guide-demo'));
+  I.appendMessage(message('icebreaker-user-demo'));
   I.isCatLocalChatActive = () => true;
   I.appendMessage(message('local-cat'));
   await flush();
@@ -130,7 +131,7 @@ test('burst messages wait for available slots without losing or duplicating deci
   assert.equal(I.state.messages.filter(item => item.reaction).length, 4);
 });
 
-for (const change of ['clear', 'restore', 'character', 'edit', 'remove', 'failed']) {
+for (const change of ['clear', 'restore', 'character', 'edit', 'remove', 'failed', 'icebreaker']) {
   test(`queued reactions are invalidated after ${change}`, async () => {
     const { I, window, calls } = fixture();
     for (let index = 0; index < 4; index++) I.appendMessage(message(`queued-${index}`));
@@ -142,6 +143,7 @@ for (const change of ['clear', 'restore', 'character', 'edit', 'remove', 'failed
     if (change === 'edit') I.updateMessage('queued-3', { blocks: [{ type: 'text', text: 'changed' }] });
     if (change === 'remove') I.removeMessage('queued-3');
     if (change === 'failed') I.updateMessage('queued-3', { status: 'failed' });
+    if (change === 'icebreaker') I.state.messages.find(m => m.id === 'queued-3').source = 'new_user_icebreaker';
     for (const call of calls.slice()) deliver(call, null);
     await flush();
     assert.equal(calls.length, 3, 'a stale queued message must never reach the model');

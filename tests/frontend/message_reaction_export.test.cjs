@@ -155,6 +155,25 @@ test('Markdown escapes stay literal inside normal formatting and do not become l
   assert.equal(preview.previewDocument.includes('<a href="https://example.com"'), false);
 });
 
+for (const [text, expected] of [
+  ['`\\d+\\.\\d+`', String.raw`<code>\d+\.\d+</code>`],
+  ['`print("a\\"b")`', String.raw`<code>print(&quot;a\&quot;b&quot;)</code>`],
+  ['`C:\\_tmp`', String.raw`<code>C:\_tmp</code>`],
+  ['``literal ` tick and \\_slash``', '<code>literal ` tick and \\_slash</code>'],
+  ['```python\nprint("a\\\"b")\nC:\\_tmp\n```', '<pre><code>print(&quot;a\\&quot;b&quot;)\nC:\\_tmp</code></pre>'],
+  ['~~~\n\\d+\\.\\d+ **literal** <script>\n~~~', '<pre><code>\\d+\\.\\d+ **literal** &lt;script&gt;</code></pre>'],
+]) {
+  test('Markdown code preserves literal backslashes: ' + text, async () => {
+    const f = fixture([message({ blocks: [{ type: 'text', text }] })]);
+    const options = { messageIds: ['user-1'], format: 'markdown' };
+    const preview = await f.api.buildCompactInlinePreview(options);
+    assert.ok(preview.previewDocument.includes(expected), expected);
+    assert.ok(preview.previewDocument.includes(`<blockquote>${label}</blockquote>`));
+    await f.api.copyCompactInlineSelection(options);
+    assert.ok(f.clipboard[0].includes(text));
+  });
+}
+
 test('opening the export window keeps a reaction received while the popup was loading', async () => {
   const f = fixture([message({ reaction: undefined })]);
   let finishOpening;

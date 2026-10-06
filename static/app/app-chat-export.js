@@ -771,6 +771,16 @@
         var marker = '\u0000';
         while (source.indexOf(marker) >= 0) marker += '\u0000';
         var escaped = [];
+        // Code spans contain literal backslashes and Markdown punctuation.
+        // Match an equally sized closing delimiter before processing escapes.
+        source = source.replace(/(`+)([\s\S]*?)(\1)(?!`)/g, function (match, ticks, content, closing, offset) {
+            if ((offset > 0 && source.charAt(offset - 1) === '`') || content.charAt(0) === '`') return match;
+            var backslashes = 0;
+            for (var cursor = offset - 1; cursor >= 0 && source.charAt(cursor) === '\\'; cursor -= 1) backslashes += 1;
+            if (backslashes % 2) return match;
+            escaped.push('<code>' + escapeHtml(content) + '</code>');
+            return marker + (escaped.length - 1) + ';';
+        });
         source = source.replace(/\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])/g, function (_, literal) {
             escaped.push(escapeHtml(literal));
             return marker + (escaped.length - 1) + ';';
@@ -791,7 +801,6 @@
             if (!isSafeUrl(restoreEscapes(url))) return label;
             return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
         });
-        source = source.replace(/`([^`]+)`/g, '<code>$1</code>');
         source = source.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
         source = source.replace(/(^|[^\*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
         return restoreEscapes(source);
@@ -802,6 +811,14 @@
         var html = [];
         var paragraphBuffer = [];
         var inList = false;
+        var codeFence = null;
+        var codeLines = [];
+
+        function flushCode() {
+            html.push('<pre><code>' + escapeHtml(codeLines.join('\n')) + '</code></pre>');
+            codeLines = [];
+            codeFence = null;
+        }
 
         function flushParagraph() {
             if (paragraphBuffer.length === 0) return;
@@ -814,6 +831,19 @@
 
         for (var i = 0; i < lines.length; i += 1) {
             var line = lines[i];
+            if (codeFence) {
+                var closingFence = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+                if (closingFence && closingFence[1][0] === codeFence[0]
+                        && closingFence[1].length >= codeFence.length) flushCode();
+                else codeLines.push(line);
+                continue;
+            }
+            var openingFence = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+            if (openingFence && (openingFence[1][0] !== '`' || openingFence[2].indexOf('`') < 0)) {
+                flushParagraph(); closeList();
+                codeFence = openingFence[1];
+                continue;
+            }
             if (line.trim() === '') { flushParagraph(); closeList(); continue; }
             var headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
             if (headingMatch) {
@@ -839,6 +869,7 @@
         }
         flushParagraph();
         closeList();
+        if (codeFence) flushCode();
 
         return html.join('\n');
     }

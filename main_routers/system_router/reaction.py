@@ -14,6 +14,7 @@ from config import (
 )
 from config.prompts.prompts_reaction import MESSAGE_REACTION_PROMPT
 from utils.file_utils import robust_json_loads
+from utils.icebreaker_free_text import strip_json_fence
 from utils.llm_client import create_chat_llm_async
 from utils.tokenize import acount_tokens, atruncate_to_tokens
 from utils.token_tracker import set_call_type
@@ -42,6 +43,9 @@ async def _choose_message_reaction(payload: MessageReactionRequest):
     personas = character_data[5]
     if payload.lanlan_name not in personas:
         return None
+    persona = str(personas[payload.lanlan_name] or "").replace(
+        "{LANLAN_NAME}", payload.lanlan_name
+    ).replace("{MASTER_NAME}", str(character_data[0] or ""))
     model_config = await cm.aget_model_api_config("emotion")
     if not model_config.get("model") or not model_config.get("base_url"):
         return None
@@ -58,7 +62,7 @@ async def _choose_message_reaction(payload: MessageReactionRequest):
     }
     source_budget = user_budget - await acount_tokens(json.dumps(data, ensure_ascii=False))
     while source_budget > 0:
-        data["persona"] = await atruncate_to_tokens(str(personas[payload.lanlan_name] or ""), source_budget // 4)
+        data["persona"] = await atruncate_to_tokens(persona, source_budget // 4)
         data["context"] = [
             {"role": item.role, "text": await atruncate_to_tokens(item.text, source_budget // 12)}
             for item in payload.context
@@ -83,10 +87,14 @@ async def _choose_message_reaction(payload: MessageReactionRequest):
     )
     async with llm:
         result = await llm.ainvoke(messages)
-    parsed = robust_json_loads(result.content)
+    parsed = robust_json_loads(strip_json_fence(result.content))
     if not isinstance(parsed, dict):
         return None
     emoji = parsed.get("emoji")
+    # Providers may omit the optional emoji presentation selector. Always emit
+    # the canonical allowlisted sequence so all frontend schemas agree.
+    if emoji in ("❤", "⚠"):
+        emoji += "\ufe0f"
     if not isinstance(emoji, str) or emoji not in REACTION_EMOJIS:
         return None
     return {"emoji": emoji, "author": payload.lanlan_name}
@@ -108,6 +116,7 @@ async def message_reaction(request: Request):
         async with asyncio.timeout(MESSAGE_REACTION_TIMEOUT_SECONDS):
             reaction = await _choose_message_reaction(payload)
         return {"message_id": payload.message_id, "reaction": reaction}
-    except Exception:
+    except Exception as exc:
         # No raw conversations, provider errors, or credentials in logs/results.
+        print(f"[message_reaction] failed: {type(exc).__name__}")
         return {"message_id": payload.message_id, "reaction": None}

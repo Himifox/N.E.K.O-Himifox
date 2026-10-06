@@ -2161,7 +2161,7 @@
             reactionQueue.delete(pending.id);
             var current = I.state.messages.find(function (item) { return item.id === pending.id; });
             if (!current || current.role !== 'user' || current.status !== 'sent' || current.reaction
-                    || isYuiGuideChatMessage(current)
+                    || isYuiGuideChatMessage(current) || isNewUserIcebreakerChatMessage(current)
                     || getReactionCharacterName() !== pending.name || getReactionMessageText(current) !== pending.text
                     || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) continue;
             startMessageReaction(pending);
@@ -2171,7 +2171,7 @@
     function scheduleMessageReaction(message) {
         if (!message || message.role !== 'user' || message.status !== 'sent'
                 || message.reaction || reactionAttempts.has(message.id)
-                || isYuiGuideChatMessage(message)
+                || isYuiGuideChatMessage(message) || isNewUserIcebreakerChatMessage(message)
                 || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) return;
         var name = getReactionCharacterName();
         var text = getReactionMessageText(message);

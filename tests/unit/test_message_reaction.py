@@ -3,6 +3,8 @@
 import asyncio
 import importlib
 import json
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -42,14 +44,14 @@ def harness(monkeypatch):
     state = SimpleNamespace(
         response='{"emoji":"🎉"}', error=None, wait=False, entered=False, closed=False,
         factory_calls=[], tier_calls=[], budget_calls=[], messages=[], tracked=[],
-        personas={"NEKO": "A warm, playful companion"},
+        personas={"NEKO": "A warm, playful companion"}, master_name="Master",
         model_config={"model": "configured-emotion", "base_url": "http://local.invalid/v1",
                       "api_key": "", "provider_type": "openai"},
     )
 
     class Config:
         async def aget_character_data(self):
-            return (None, None, None, None, None, state.personas)
+            return (state.master_name, None, None, None, None, state.personas)
 
         async def aget_model_api_config(self, tier):
             state.tier_calls.append(tier)
@@ -226,10 +228,55 @@ def test_allowlisted_reactions(harness, emoji):
 
 
 @pytest.mark.parametrize("response", [
+    '```json\n{"emoji":"🎉"}\n```',
+    '```JSON\r\n{"emoji":"🎉"}\r\n```',
+    '```\n{"emoji":"🎉"}\n```',
+])
+def test_fenced_model_json_is_parsed(harness, response):
+    module, state = harness
+    state.response = response
+    assert invoke(module, payload())["reaction"] == {"emoji": "🎉", "author": "NEKO"}
+    assert state.closed
+
+
+def test_persona_placeholders_are_resolved_before_budgeting(harness):
+    module, state = harness
+    state.personas["NEKO"] = "{LANLAN_NAME} accompanies {MASTER_NAME}"
+    invoke(module, payload())
+    data = json.loads(state.messages[0][1]["content"])
+    assert data["persona"] == "NEKO accompanies Master"
+
+
+@pytest.mark.parametrize("emoji, canonical", [("❤", "❤️"), ("⚠", "⚠️")])
+def test_optional_presentation_selector_is_normalized(harness, emoji, canonical):
+    module, state = harness
+    state.response = json.dumps({"emoji": emoji})
+    assert invoke(module, payload())["reaction"] == {"emoji": canonical, "author": "NEKO"}
+
+
+def test_reaction_candidates_agree_across_prompt_backend_host_and_schema():
+    module = importlib.import_module("main_routers.system_router.reaction")
+    prompt = importlib.import_module("config.prompts.prompts_reaction").MESSAGE_REACTION_PROMPT
+    root = Path(__file__).resolve().parents[2]
+    host = (root / "static/app/app-react-chat-window/message-bundle-actions-and-prompts.js").read_text(encoding="utf-8")
+    schema = (root / "frontend/react-neko-chat/src/message-schema.ts").read_text(encoding="utf-8")
+    host_candidates = re.search(r"var REACTION_EMOJIS = \[(.*?)\];", host).group(1)
+    schema_candidates = re.search(r"messageReactionSchema = z.object\(\{\s*emoji: z.enum\(\[(.*?)\]", schema).group(1)
+    groups = prompt.split("Choose at most one emoji from these allowed groups:", 1)[1].split("These are message reactions", 1)[0]
+    prompt_candidates = re.findall(r"^- [^:\n]+: (.+)$", groups, re.MULTILINE)
+    assert len(module.REACTION_EMOJIS) == 38
+    assert set(re.findall(r"'([^']+)'", host_candidates)) == module.REACTION_EMOJIS
+    assert set(re.findall(r"'([^']+)'", schema_candidates)) == module.REACTION_EMOJIS
+    assert set(" ".join(prompt_candidates).split()) == module.REACTION_EMOJIS
+
+
+@pytest.mark.parametrize("response", [
     '{"emoji":null}', "null", "broken JSON", "[]", "true", '"🎉"', "{}",
     '{"emoji":true}', '{"emoji":["🎉"]}', '{"emoji":123}',
     '{"emoji":"<img src=x onerror=alert(1)>"}', '{"emoji":"🎉<script>"}',
     '{"emoji":"🎉 "}', '{"emoji":"😀"}',
+    '```json\n{"emoji":"😀"}\n```', '```json\n{"emoji":null}\n```',
+    '```json\n{broken}\n```',
 ])
 def test_invalid_or_declined_model_output_is_no_reaction(harness, response):
     module, state = harness
@@ -290,6 +337,7 @@ def test_provider_failure_hides_details_and_closes_client(harness, capsys, caplo
     assert result == {"message_id": "message-1", "reaction": None}
     assert state.closed
     captured = capsys.readouterr()
+    assert "[message_reaction] failed: RuntimeError" in captured.out
     assert private not in json.dumps(result) + captured.out + captured.err + caplog.text
 
 
