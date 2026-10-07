@@ -610,18 +610,32 @@ def _push_emotion_update(lanlan_name, emotion, confidence):
         })
 
 
-def _emotion_response(emotion, confidence, lanlan_name=None):
-    candidates = MESSAGE_REACTION_EMOJIS_BY_EMOTION.get(emotion, ())
-    reaction = None
-    if (lanlan_name and candidates and math.isfinite(confidence)
-            and confidence >= MESSAGE_REACTION_CONFIDENCE_THRESHOLD):
-        reaction = {"emoji": random.choice(candidates), "author": lanlan_name}
-
-    return {
+def _emotion_response(emotion, confidence, lanlan_name=None, model_emoji=None):
+    response = {
         "emotion": emotion,
         "confidence": confidence,
-        "reaction": reaction
+        "reaction": None
     }
+    # Optional annotation failures must not discard the avatar decision.
+    try:
+        if (not lanlan_name or emotion not in _EMOTION_CANONICAL_LABELS
+                or emotion == "neutral" or not math.isfinite(confidence)
+                or confidence < MESSAGE_REACTION_CONFIDENCE_THRESHOLD):
+            return response
+        if isinstance(model_emoji, str) and any(
+            model_emoji in candidates
+            for candidates in MESSAGE_REACTION_EMOJIS_BY_EMOTION.values()
+        ):
+            emoji = model_emoji
+        else:
+            candidates = MESSAGE_REACTION_EMOJIS_BY_EMOTION.get(emotion, ())
+            if not candidates:
+                return response
+            emoji = random.choice(candidates)
+        response["reaction"] = {"emoji": emoji, "author": lanlan_name}
+    except Exception as exc:
+        print(f"[Emotion] reaction selection failed: {type(exc).__name__}")
+    return response
 
 
 def _coerce_emotion_confidence(raw_confidence, default=0.5):
@@ -988,6 +1002,7 @@ async def emotion_analysis(request: Request):
             result_text = "\n".join(lines).strip()
         
         reaction_eligible = False
+        model_emoji = None
 
         # 尝试解析JSON响应
         emotion = "neutral"
@@ -1008,6 +1023,7 @@ async def emotion_analysis(request: Request):
                 emotion, confidence = _apply_degraded_emotion_fallback()
             else:
                 # 获取emotion和confidence
+                model_emoji = result.get("emoji")
                 raw_emotion = result.get("emotion", "neutral")
                 raw_confidence = result.get("confidence", 0.5)
                 emotion = _normalize_emotion_label(raw_emotion, raw_confidence)
@@ -1028,6 +1044,7 @@ async def emotion_analysis(request: Request):
                 try:
                     reaction_score = float(raw_confidence)
                     reaction_eligible = (reaction_label_valid
+                                         and "confidence" in result
                                          and not isinstance(raw_confidence, bool)
                                          and math.isfinite(reaction_score)
                                          and 0.0 <= reaction_score <= 1.0)
@@ -1064,7 +1081,9 @@ async def emotion_analysis(request: Request):
             emotion, confidence = _apply_degraded_emotion_fallback()
 
         _push_emotion_update(lanlan_name, emotion, confidence)
-        return _emotion_response(emotion, confidence, lanlan_name if reaction_eligible else None)
+        return _emotion_response(
+            emotion, confidence, lanlan_name if reaction_eligible else None, model_emoji
+        )
             
     except Exception as e:
         print(f"[Emotion] analysis failed: {type(e).__name__}")

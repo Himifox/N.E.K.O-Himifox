@@ -17,11 +17,12 @@ Emotion-analysis prompt templates used by runtime expression / reaction systems.
 """
 from __future__ import annotations
 
+from config import proactive_settings
 from config.prompts.prompts_sys import _loc
 
 
 OUTWARD_EMOTION_ANALYSIS_PROMPT = {
-    'zh': """你是一个情感分析专家。请判断输入文本里最主导、最外显的一种情绪，并只返回 JSON：{"emotion": "情感类型", "confidence": 置信度}。
+    'zh': """你是一个情感分析专家。请判断输入文本里最主导、最外显的一种情绪，并只返回 JSON：{"emotion": "情感类型", "confidence": 置信度, "emoji": null}。
 
 可选情感只有这五种：
 - happy：开心、兴奋、满足、轻快、宠溺、可爱、调皮、得意、热情
@@ -39,12 +40,13 @@ OUTWARD_EMOTION_ANALYSIS_PROMPT = {
 6. surprised 只用于明显的突发惊讶、意外、震惊、夸张反应；不要只因为有感叹号、语气词就判为 surprised。
 7. 语气助词、口癖、拟声词、宠物叫声这类风格词本身不代表情绪，不能单独作为判断依据。
 8. confidence 取 0 到 1 之间的小数；情绪很明确时应给出较高置信度。
+9. 完成情绪判断后，从以下完整候选中选一个最贴合输入的角色回复所流露反应的 emoji：{reaction_emojis}。emoji 不限于所选情感的分类候选；neutral 或拿不准时返回 null，表示没有建议，不改变 emotion 或 confidence。
 
 只返回 JSON，不要附加任何解释文本。""",
 
     # 开头那句「你是一个情感分析专家。」在所有语种里都保持简体原样——它在 en/ja/ko
     # 等每一条模板里都是同一串字面量，繁中这条跟着走，不做转换。
-    'zh-TW': """你是一个情感分析专家。請判斷輸入文字裡最主導、最外顯的一種情緒，並只回傳 JSON：{"emotion": "情感類型", "confidence": 信賴度}。
+    'zh-TW': """你是一个情感分析专家。請判斷輸入文字裡最主導、最外顯的一種情緒，並只回傳 JSON：{"emotion": "情感類型", "confidence": 信賴度, "emoji": null}。
 
 可選情感只有這五種：
 - happy：開心、興奮、滿足、輕快、寵溺、可愛、調皮、得意、熱情
@@ -62,10 +64,11 @@ OUTWARD_EMOTION_ANALYSIS_PROMPT = {
 6. surprised 只用於明顯的突發驚訝、意外、震驚、誇張反應；不要只因為有驚嘆號、語氣詞就判為 surprised。
 7. 語氣助詞、口癖、擬聲詞、寵物叫聲這類風格詞本身不代表情緒，不能單獨作為判斷依據。
 8. confidence 取 0 到 1 之間的小數；情緒很明確時應給出較高信賴度。
+9. 完成情緒判斷後，從以下完整候選中選一個最貼合輸入的角色回覆所流露反應的 emoji：{reaction_emojis}。emoji 不限於所選情感的分類候選；neutral 或拿不準時回傳 null，表示沒有建議，不改變 emotion 或 confidence。
 
 只回傳 JSON，不要附加任何解釋文字。""",
 
-    'en': """你是一个情感分析专家。Identify the single most dominant and outward emotion in the input text and return JSON only: {"emotion": "emotion_type", "confidence": confidence}.
+    'en': """你是一个情感分析专家。Identify the single most dominant and outward emotion in the input text and return JSON only: {"emotion": "emotion_type", "confidence": confidence, "emoji": null}.
 
 Allowed emotions only:
 - happy: joyful, excited, affectionate, playful, cute, delighted, warm
@@ -83,10 +86,11 @@ Rules:
 6. Use surprised only for clear shock, sudden surprise, or exaggerated astonishment; do not label something surprised just because it has exclamation marks or filler particles.
 7. Catchphrases, sound effects, pet-like speech, and filler words are style markers, not emotions by themselves.
 8. confidence must be a number between 0 and 1.
+9. After judging the emotion, choose one emoji that best reflects the companion reply's reaction from this full list: {reaction_emojis}. The emoji is not restricted to the chosen emotion's category; return null for neutral or when unsure, meaning no suggestion, without changing emotion or confidence.
 
 Return JSON only, with no explanation.""",
 
-    'ja': """你是一个情感分析专家。入力文の中で最も支配的で外に出ている感情を1つだけ選び、JSONのみで返してください：{"emotion": "emotion_type", "confidence": confidence}。
+    'ja': """你是一个情感分析专家。入力文の中で最も支配的で外に出ている感情を1つだけ選び、JSONのみで返してください：{"emotion": "emotion_type", "confidence": confidence, "emoji": null}。
 
 使用できる感情は次の5つのみです：
 - happy：喜ぶ、嬉しい、楽しい、わくわく、幸せ、かわいい、甘える
@@ -104,10 +108,11 @@ Return JSON only, with no explanation.""",
 6. surprised は、はっきりした驚き・意外さ・衝撃・大げさな驚愕にだけ使い、感嘆符や語気だけで surprised にしない。
 7. 口ぐせ、擬音、語尾、キャラっぽい言い回しは、それ自体では感情根拠にならない。
 8. confidence は 0〜1 の数値にする。
+9. 感情を判断した後、入力されたキャラクターの返答に表れた反応に最も合う emoji を次の全候補から1つ選ぶ：{reaction_emojis}。選んだ感情のカテゴリに限定しない。neutral または迷う場合は提案なしを表す null を返し、emotion や confidence は変更しない。
 
 JSONのみを返し、説明文は付けないでください。""",
 
-    'ko': """你是一个情感分析专家。입력 텍스트에서 가장 지배적이고 겉으로 드러나는 감정 하나만 고르고 JSON만 반환하세요: {"emotion": "emotion_type", "confidence": confidence}.
+    'ko': """你是一个情感分析专家。입력 텍스트에서 가장 지배적이고 겉으로 드러나는 감정 하나만 고르고 JSON만 반환하세요: {"emotion": "emotion_type", "confidence": confidence, "emoji": null}.
 
 허용되는 감정은 다음 다섯 가지뿐입니다:
 - happy: 행복, 즐거움, 기쁨, 신남, 설렘, 애정, 귀여움
@@ -125,10 +130,11 @@ JSONのみを返し、説明文は付けないでください。""",
 6. surprised 는 분명한 놀람, 충격, 뜻밖의 상황, 과장된 경악에만 사용하고, 느낌표나 말끝 표현만으로 surprised 로 판단하지 마세요.
 7. 말버릇, 의성어, 캐릭터 말투, 동물 흉내 같은 표현은 그 자체로 감정을 뜻하지 않습니다.
 8. confidence 는 0~1 사이 숫자여야 합니다.
+9. 감정을 판단한 뒤, 입력된 캐릭터 답변의 반응에 가장 잘 맞는 emoji 하나를 다음 전체 후보에서 고르세요: {reaction_emojis}. 선택한 감정의 범주로 제한하지 마세요. neutral 이거나 확신이 없으면 제안이 없다는 뜻의 null 을 반환하고 emotion 이나 confidence 는 바꾸지 마세요.
 
 설명 없이 JSON만 반환하세요.""",
 
-    'ru': """你是一个情感分析专家。Определите одну наиболее доминирующую и внешне выраженную эмоцию во входном тексте и верните только JSON: {"emotion": "emotion_type", "confidence": confidence}.
+    'ru': """你是一个情感分析专家。Определите одну наиболее доминирующую и внешне выраженную эмоцию во входном тексте и верните только JSON: {"emotion": "emotion_type", "confidence": confidence, "emoji": null}.
 
 Допустимы только 5 эмоций:
 - happy: радость, счастье, веселье, восторг, тёплое чувство, игривость, умиление
@@ -146,10 +152,11 @@ JSONのみを返し、説明文は付けないでください。""",
 6. surprised используйте только для явного шока, внезапного удивления или преувеличенного изумления; одних восклицаний или частиц для этого недостаточно.
 7. Слова-паразиты, звукоподражания, повторяющиеся словечки и «персонажная» манера речи сами по себе не являются признаком эмоции.
 8. confidence должно быть числом от 0 до 1.
+9. После определения эмоции выберите один emoji, лучше всего передающий реакцию в ответе персонажа, из полного списка: {reaction_emojis}. Не ограничивайте выбор категорией выбранной эмоции; для neutral или при неуверенности верните null (нет предложения), не меняя emotion или confidence.
 
 Верните только JSON без пояснений.""",
 
-    'es': """你是一个情感分析专家。Identifica la única emoción más dominante y más visible en el texto de entrada y devuelve solo JSON: {"emotion": "emotion_type", "confidence": confidence}.
+    'es': """你是一个情感分析专家。Identifica la única emoción más dominante y más visible en el texto de entrada y devuelve solo JSON: {"emotion": "emotion_type", "confidence": confidence, "emoji": null}.
 
 Emociones permitidas:
 - happy: alegría, entusiasmo, afecto, juego, ternura, deleite, calidez
@@ -167,10 +174,11 @@ Reglas:
 6. Usa surprised solo para shock claro, sorpresa repentina o asombro exagerado; no etiquetes como surprised solo por signos de exclamación o partículas.
 7. Muletillas, efectos de sonido, habla tipo mascota y palabras de relleno son marcadores de estilo, no emociones por sí mismas.
 8. confidence debe ser un número entre 0 y 1.
+9. Tras determinar la emoción, elige un emoji que refleje mejor la reacción de la respuesta del personaje entre todos estos candidatos: {reaction_emojis}. No limites la elección a la categoría de la emoción; devuelve null para neutral o si tienes dudas, indicando que no hay sugerencia, sin cambiar emotion ni confidence.
 
 Devuelve solo JSON, sin explicación.""",
 
-    'pt': """你是一个情感分析专家。Identifique a única emoção mais dominante e mais externa no texto de entrada e retorne apenas JSON: {"emotion": "emotion_type", "confidence": confidence}.
+    'pt': """你是一个情感分析专家。Identifique a única emoção mais dominante e mais externa no texto de entrada e retorne apenas JSON: {"emotion": "emotion_type", "confidence": confidence, "emoji": null}.
 
 Emoções permitidas:
 - happy: alegria, empolgação, afeto, brincadeira, fofura, deleite, calor
@@ -188,16 +196,24 @@ Regras:
 6. Use surprised apenas para choque claro, surpresa repentina ou espanto exagerado; não rotule como surprised só por pontos de exclamação ou partículas.
 7. Bordões, efeitos sonoros, fala de bichinho e palavras de preenchimento são marcadores de estilo, não emoções por si só.
 8. confidence deve ser um número entre 0 e 1.
+9. Após determinar a emoção, escolha um emoji que melhor represente a reação na resposta do personagem entre todos estes candidatos: {reaction_emojis}. Não limite a escolha à categoria da emoção; retorne null para neutral ou em caso de dúvida, indicando nenhuma sugestão, sem mudar emotion ou confidence.
 
 Retorne apenas JSON, sem explicação.""",
 }
 
 
 def get_outward_emotion_analysis_prompt(lang: str = 'zh') -> str:
-    return _loc(OUTWARD_EMOTION_ANALYSIS_PROMPT, lang)
+    emojis = dict.fromkeys(
+        emoji
+        for candidates in proactive_settings.MESSAGE_REACTION_EMOJIS_BY_EMOTION.values()
+        for emoji in candidates
+    )
+    return _loc(OUTWARD_EMOTION_ANALYSIS_PROMPT, lang).replace(
+        '{reaction_emojis}', ' '.join(emojis)
+    )
 
 
-outward_emotion_analysis_prompt = OUTWARD_EMOTION_ANALYSIS_PROMPT['zh']
+outward_emotion_analysis_prompt = get_outward_emotion_analysis_prompt('zh')
 
 
 # ============================================================================
