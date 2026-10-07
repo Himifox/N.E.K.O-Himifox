@@ -65,7 +65,18 @@ LOCALE_VERSION_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9._-]*$")
 # 递增 LOCALE_VERSION 时，把旧值追加到这里。
 RETIRED_LOCALE_VERSIONS = frozenset(
     {
+        "2026-10-06-message-reactions",
+        "2026-10-05-pr3149-http-pairing-rebase",
+        "2026-10-05-pr3149-theater-rebase",
+        "2026-10-05-pr3149-instance-access-rebase",
         "2026-10-05-instance-access-plain-http-main-merge",
+        "2026-10-04-pr3149-rebase",
+        "2026-10-03-pr3149-rebase",
+        "2026-09-29-pr3149-recent-voice-prs",
+        "2026-09-28-voice-integration-main-merge",
+        "2026-09-28-voice-identity-activation-recovery-v2",
+        "2026-09-28-pr3149-voice-identity-merge",
+        "2026-09-27-pr3172-privacy-and-lifecycle",
         "2026-10-05-instance-access-plain-http",
         "2026-10-05-theater-reinvitation-refresh",
         "2026-10-05-theater-reinvitation",
@@ -345,7 +356,7 @@ RETIRED_LOCALE_VERSIONS = frozenset(
 #
 # 数组也按下标展开，所以往 badminton.lines.* 这类台词数组里追加一条同样会打红：
 # 陈旧缓存下那一条会取到 undefined，症状和缺 key 是一类。
-LOCALE_KEY_SIGNATURE = "5e328a76abce8bc5fb0b09dd6afab374a99e0fd61dbb91084b3d3042008ffcfc"
+LOCALE_KEY_SIGNATURE = 'dc280711581762b963e2f6d32d1532b1b85cfd646e51082a1195630ad57365af'
 
 _BUMP_INSTRUCTIONS = (
     "static/locales 的 key 结构变了。请在 static/i18n-i18next.js 里把 LOCALE_VERSION "

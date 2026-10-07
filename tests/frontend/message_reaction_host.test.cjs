@@ -45,208 +45,87 @@ function message(id = 'user-1', extra = {}) {
     blocks: [{ type: 'text', text: `hello ${id}` }], ...extra };
 }
 
-function deliver(call, reaction = { emoji: '❤️', author: 'Neko' }, messageId = call.body.message_id) {
-  call.resolve({ ok: true, async json() { return { message_id: messageId, reaction }; } });
+
+const result = emoji => ({ emotion: 'happy', confidence: 0.9, reaction: { emoji, author: 'Neko' } });
+test('reuses existing emotion result without any independent request and refreshes export', () => {
+  const {I,window,calls}=fixture(); let refreshed; window.appChatExport={refreshMessageReaction(id){refreshed=id;}};
+  I.appendMessage(message()); const target=window.captureMessageReactionTarget();
+  I.appendMessage(message('next')); window.applyMessageReactionFromEmotion(target,result('🥰'));
+  assert.equal(I.state.messages[0].reaction.emoji,'🥰'); assert.equal(I.state.messages[1].reaction,undefined);
+  assert.equal(refreshed,'user-1'); assert.equal(calls.length,0);
+  const snapshot=I.cloneMessage(I.state.messages[0]); snapshot.reaction.emoji='😊';
+  assert.equal(I.state.messages[0].reaction.emoji,'🥰');
+});
+for(const mutate of [f=>f.I.clearMessages(),f=>f.I.setMessages([message()]),f=>f.I.removeMessage('user-1'),f=>f.I.updateMessage('user-1',{blocks:[{type:'text',text:'edited'}]}),f=>f.I.updateMessage('user-1',{status:'failed'}),f=>{f.window.appState.lanlan_name='Other';},f=>{f.I.isCatLocalChatActive=()=>true;}]) {
+ test('stale emotion cannot update replaced, edited, failed or different session messages '+mutate.toString(),()=>{
+  const f=fixture();f.I.appendMessage(message()); const target=f.window.captureMessageReactionTarget(); mutate(f);
+  f.window.applyMessageReactionFromEmotion(target,result('🎉')); assert.ok(f.I.state.messages.every(m=>!m.reaction));
+ });
 }
-
-test('background reaction uses security headers, persona identity, bounded previous context and exact message ID', async () => {
-  const { I, calls } = fixture();
-  I.setMessages([message('older'), message('reply', { role: 'assistant', author: 'Neko' })]);
-  assert.equal(calls.length, 0, 'restored history must not launch model requests');
-  I.appendMessage(message());
-  await flush();
-  assert.equal(calls.length, 1);
-  const call = calls[0];
-  assert.equal(call.url, '/api/chat/reaction');
-  assert.equal(call.options.headers['X-CSRF-Token'], 'test-csrf');
-  assert.equal(call.body.lanlan_name, 'Neko');
-  assert.equal(call.body.message_id, 'user-1');
-  assert.deepEqual(call.body.context, [
-    { role: 'user', text: 'hello older' }, { role: 'assistant', text: 'hello reply' },
-  ]);
-  deliver(call);
-  await flush();
-  const reacted = I.state.messages.find(m => m.id === 'user-1');
-  assert.equal(reacted.reaction.emoji, '❤️');
-  assert.equal(reacted.blocks[0].text, 'hello user-1');
-  const cloned = I.cloneMessage(reacted);
-  cloned.reaction.emoji = '😂';
-  assert.equal(reacted.reaction.emoji, '❤️', 'snapshot must not share mutable reaction objects');
+test('restored, tutorial, image-only, failed and local chat messages are ineligible',()=>{
+ const f=fixture();f.I.setMessages([message()]);assert.equal(f.window.captureMessageReactionTarget(),null);
+ for(const m of [message('yui-guide-demo'),message('icebreaker-user-demo'),message('image',{blocks:[{type:'image',url:'/a'}]}),message('failed',{status:'failed'}),message('assistant',{role:'assistant'})]){
+  f.I.appendMessage(m);assert.equal(f.window.captureMessageReactionTarget(),null);
+ }
+ f.I.isCatLocalChatActive=()=>true;f.I.appendMessage(message('local'));assert.equal(f.window.captureMessageReactionTarget(),null);assert.equal(f.calls.length,0);
+});
+test('sending waits for sent; null results never rearm on metadata updates',()=>{
+ const f=fixture(); f.I.appendMessage(message('u',{status:'sending'}));assert.equal(f.window.captureMessageReactionTarget(),null);
+ f.I.updateMessage('u',{status:'sent'});const target=f.window.captureMessageReactionTarget();assert.ok(target);
+ f.window.applyMessageReactionFromEmotion(target,{emotion:'neutral',reaction:null});f.I.updateMessage('u',{time:'11:00'});
+ assert.equal(f.window.captureMessageReactionTarget(),null);assert.equal(f.calls.length,0);
+});
+test('request identity mismatch never attaches a reply to a later user',()=>{
+ const f=fixture();f.window._lastSubmittedRequestId='second';f.I.appendMessage(message());
+ assert.equal(f.window.captureMessageReactionTarget('first'),null);
+});
+for(const emoji of ['😊','😄','🥰','✨','🎉','😢','🥺','🤗','💧','😮','😲','👀','❗','😤','😠','💢','😾']) test('accepts configured candidate '+emoji,()=>{
+ const f=fixture();f.I.appendMessage(message());f.window.applyMessageReactionFromEmotion(f.window.captureMessageReactionTarget(),result(emoji));assert.equal(f.I.state.messages[0].reaction.emoji,emoji);
+});
+for(const r of [null,{error:'failed'},result('not-emoji'),{reaction:{emoji:'😊',author:'Other'}}]) test('invalid result is ignored '+JSON.stringify(r),()=>{
+ const f=fixture();f.I.appendMessage(message());f.window.applyMessageReactionFromEmotion(f.window.captureMessageReactionTarget(),r);assert.equal(f.I.state.messages[0].reaction,undefined);
 });
 
-for (const status of ['sending', 'streaming']) {
-  test(`${status} waits for final sent state and subsequent updates do not duplicate requests`, async () => {
-    const { I, calls } = fixture();
-    I.appendMessage(message('user-1', { status }));
-    await flush();
-    assert.equal(calls.length, 0);
-    I.updateMessage('user-1', { status: 'sent' });
-    I.updateMessage('user-1', { time: '10:01' });
-    await flush();
-    assert.equal(calls.length, 1);
-    deliver(calls[0]);
-    await flush();
-    assert.equal(I.state.messages[0].reaction.emoji, '❤️');
-    assert.equal(calls.length, 1);
-  });
+test('overlapping replies use request IDs captured when users send',()=>{
+ const f=fixture();f.window._lastSubmittedRequestId='r1';f.I.appendMessage(message('u1'));
+ f.window._lastSubmittedRequestId='r2';f.I.appendMessage(message('u2'));
+ const first=f.window.captureMessageReactionTarget('r1'),second=f.window.captureMessageReactionTarget('r2');
+ f.window.applyMessageReactionFromEmotion(second,result('😾'));f.window.applyMessageReactionFromEmotion(first,result('😊'));
+ assert.deepEqual(Array.from(f.I.state.messages,m=>m.reaction.emoji),['😊','😾']);
+});
+function finalizeFixture(analysis) {
+ const websocket=fs.readFileSync(path.join(__dirname,'../../static/app/app-websocket.js'),'utf8');
+ const source=websocket.slice(websocket.indexOf('    function finalizeAssistantTurn('),websocket.indexOf('    function ensureAssistantTurnStarted('));
+ const timers=[];const applied=[];const S={messageReactionTarget:{id:'original'}};
+ const window={_geminiTurnFullText:'reply',analyzeEmotion:analysis,applyMessageReactionFromEmotion:(...args)=>applied.push(args),t:x=>x};
+ const context=vm.createContext({window,S,console,Node:{ELEMENT_NODE:1},Promise,setTimeout(fn,delay){timers.push({fn,delay});},emitAssistantLifecycleEvent(){}});
+ vm.runInContext(source+';this.finalize=finalizeAssistantTurn;',context);
+ return {context,timers,applied,S,window};
 }
-
-test('non-user, failed, image-only, tutorial and local cat messages never call the model', async () => {
-  const { I, calls } = fixture();
-  for (const role of ['assistant', 'system', 'tool']) I.appendMessage(message(role, { role }));
-  I.appendMessage(message('failed', { status: 'failed' }));
-  I.appendMessage(message('image', { blocks: [{ type: 'image', url: '/image.png' }] }));
-  I.appendMessage(message('yui-guide-demo'));
-  I.appendMessage(message('icebreaker-user-demo'));
-  I.isCatLocalChatActive = () => true;
-  I.appendMessage(message('local-cat'));
-  await flush();
-  assert.equal(calls.length, 0);
+test('finalization calls emotion once and carries original target through delayed completion',async()=>{
+ let resolve;let calls=0;const f=finalizeFixture(()=>{calls++;return new Promise(r=>resolve=r);});
+ f.context.finalize('turn1');assert.equal(f.S.messageReactionTarget,null);f.timers.find(t=>t.delay===100).fn();
+ f.S.messageReactionTarget={id:'next'};resolve(result('😊'));await flush();
+ assert.equal(calls,1);assert.equal(f.applied[0][0].id,'original');
+});
+test('agent callback still analyzes avatar emotion but cannot react to a user',async()=>{
+ const f=finalizeFixture(async()=>result('😊'));f.context.finalize('agent',{enableMusic:false,enableReactions:false});
+ await f.timers.find(t=>t.delay===100).fn();assert.equal(f.applied[0][0],null);
+});
+test('emotion timeout ignores late response',async()=>{
+ let resolve;const f=finalizeFixture(()=>new Promise(r=>resolve=r));f.context.finalize('turn');
+ const pending=f.timers.find(t=>t.delay===100).fn();f.timers.find(t=>t.delay===5000).fn();await pending;
+ resolve(result('😊'));await flush();assert.equal(f.applied.length,0);
+});
+test('emotion failure never creates a reaction',async()=>{
+ const f=finalizeFixture(async()=>{throw new Error('offline');});f.context.finalize('turn');await f.timers.find(t=>t.delay===100).fn();assert.equal(f.applied.length,0);
 });
 
-test('out-of-order reactions attach to their own messages', async () => {
-  const { I, calls } = fixture();
-  I.appendMessage(message('first'));
-  I.appendMessage(message('second'));
-  await flush();
-  deliver(calls[1], { emoji: '🎉', author: 'Neko' });
-  deliver(calls[0], { emoji: '🤗', author: 'Neko' });
-  await flush();
-  assert.deepEqual(Array.from(I.state.messages, m => m.reaction.emoji), ['🤗', '🎉']);
+for(const source of ['chat','voice','proactive','game_route']) test('turn-start associates user target only for chat/voice: '+source,()=>{
+ const websocket=fs.readFileSync(path.join(__dirname,'../../static/app/app-websocket.js'),'utf8');
+ const block=websocket.slice(websocket.indexOf('    function ensureAssistantTurnStarted('),websocket.indexOf('    function emitAssistantSpeechCancel('));
+ let captured=null;const S={assistantTurnAwaitingBubble:true};const window={captureMessageReactionTarget(id){captured=id;return {id};}};
+ const context=vm.createContext({S,window,Date,allocateAssistantTurnId:()=> 'turn',clearPendingAssistantTurnStart(){},logAssistantLifecycle(){},emitAssistantLifecycleEvent(){},normalizeAssistantTurnId:x=>x,resolveAssistantRequestId:x=>x});
+ vm.runInContext(block+';this.start=ensureAssistantTurnStarted;',context);context.start('chunk','server',{source},'r1');
+ assert.equal(captured,['chat','voice'].includes(source)?'r1':null);
 });
-
-test('burst messages wait for available slots without losing or duplicating decisions', async () => {
-  const { I, calls } = fixture();
-  for (let index = 0; index < 8; index++) I.appendMessage(message(`burst-${index}`));
-  await flush();
-  assert.equal(calls.length, 3, 'only three model requests may run concurrently');
-  I.updateMessage('burst-3', { time: '10:01' });
-  for (let index = 0; index < 8; index++) {
-    assert.equal(calls[index].body.message_id, `burst-${index}`);
-    deliver(calls[index], index % 2 ? null : { emoji: '❤️', author: 'Neko' });
-    await flush();
-    assert.equal(calls.length, Math.min(8, index + 4));
-  }
-  assert.equal(new Set(calls.map(call => call.body.message_id)).size, 8);
-  assert.equal(I.state.messages.filter(item => item.reaction).length, 4);
-});
-
-for (const change of ['clear', 'restore', 'character', 'edit', 'remove', 'failed', 'icebreaker']) {
-  test(`queued reactions are invalidated after ${change}`, async () => {
-    const { I, window, calls } = fixture();
-    for (let index = 0; index < 4; index++) I.appendMessage(message(`queued-${index}`));
-    await flush();
-    assert.equal(calls.length, 3);
-    if (change === 'clear') I.clearMessages();
-    if (change === 'restore') I.setMessages([message('queued-3')]);
-    if (change === 'character') window.appState.lanlan_name = 'Other';
-    if (change === 'edit') I.updateMessage('queued-3', { blocks: [{ type: 'text', text: 'changed' }] });
-    if (change === 'remove') I.removeMessage('queued-3');
-    if (change === 'failed') I.updateMessage('queued-3', { status: 'failed' });
-    if (change === 'icebreaker') I.state.messages.find(m => m.id === 'queued-3').source = 'new_user_icebreaker';
-    for (const call of calls.slice()) deliver(call, null);
-    await flush();
-    assert.equal(calls.length, 3, 'a stale queued message must never reach the model');
-    I.clearMessages();
-  });
-}
-
-test('timeouts release slots for queued messages without starting duplicate requests', async () => {
-  const { I, calls, expire } = fixture();
-  for (let index = 0; index < 4; index++) I.appendMessage(message(`timeout-${index}`));
-  await flush();
-  expire();
-  await flush();
-  assert.equal(calls.length, 4);
-  assert.equal(calls[3].body.message_id, 'timeout-3');
-  assert.ok(calls.slice(0, 3).every(call => call.options.signal.aborted));
-  deliver(calls[3]);
-  await flush();
-  assert.equal(I.state.messages[3].reaction.emoji, '❤️');
-});
-
-test('accepted late reactions notify export preview after updating the host snapshot', async () => {
-  const { I, window, calls } = fixture();
-  const refreshed = [];
-  window.appChatExport = { refreshMessageReaction(id) {
-    refreshed.push({ id, emoji: I.state.messages.find(m => m.id === id).reaction.emoji });
-  } };
-  I.appendMessage(message());
-  await flush();
-  deliver(calls[0]);
-  await flush();
-  assert.deepEqual(refreshed, [{ id: 'user-1', emoji: '❤️' }]);
-});
-
-for (const change of ['clear', 'restore', 'character', 'edit', 'remove', 'failed']) {
-  test(`pending response is ignored after ${change}`, async () => {
-    const { I, window, calls } = fixture();
-    I.appendMessage(message());
-    await flush();
-    const old = calls[0];
-    if (change === 'clear') { I.clearMessages(); I.appendMessage(message()); }
-    if (change === 'restore') I.setMessages([message()]);
-    if (change === 'character') window.appState.lanlan_name = 'Other';
-    if (change === 'edit') I.updateMessage('user-1', { blocks: [{ type: 'text', text: 'changed' }] });
-    if (change === 'remove') I.removeMessage('user-1');
-    if (change === 'failed') I.updateMessage('user-1', { status: 'failed' });
-    deliver(old);
-    await flush();
-    assert.equal(I.state.messages.some(m => m.reaction), false);
-    if (change === 'clear' || change === 'restore' || change === 'remove') {
-      assert.equal(old.options.signal.aborted, true);
-    }
-    I.clearMessages();
-  });
-}
-
-for (const result of ['null', 'bad-id', 'bad-emoji', 'bad-author', 'network', 'http']) {
-  test(`optional ${result} result leaves normal chat untouched`, async () => {
-    const { I, calls } = fixture();
-    I.appendMessage(message());
-    await flush();
-    const call = calls[0];
-    if (result === 'network') call.reject(new Error('network'));
-    else if (result === 'http') call.resolve({ ok: false });
-    else if (result === 'null') deliver(call, null);
-    else if (result === 'bad-id') deliver(call, undefined, 'another-message');
-    else if (result === 'bad-author') deliver(call, { emoji: '❤️', author: 'Other' });
-    else deliver(call, { emoji: '<img src=x onerror=alert(1)>', author: 'Neko' });
-    await flush();
-    assert.equal(I.state.messages[0].reaction, undefined);
-    assert.equal(I.state.messages[0].status, 'sent');
-    assert.equal(I.state.messages[0].blocks[0].text, 'hello user-1');
-  });
-}
-
-test('deadline cancels hung security lookup and releases concurrency slots without a late fetch', async () => {
-  const { I, window, calls, expire } = fixture();
-  let unlock;
-  window.nekoLocalMutationSecurity.getMutationHeaders = () => new Promise(resolve => { unlock = resolve; });
-  I.appendMessage(message());
-  expire();
-  await flush();
-  unlock({});
-  await flush();
-  assert.equal(calls.length, 0);
-  window.nekoLocalMutationSecurity.getMutationHeaders = async () => ({});
-  I.appendMessage(message('next'));
-  await flush();
-  assert.equal(calls.length, 1);
-  deliver(calls[0]);
-  await flush();
-  assert.equal(I.state.messages[1].reaction.emoji, '❤️');
-});
-
-// Every configured emoji must survive the host validation and message update.
-for (const emoji of ['😊', '😄', '😃', '🙂', '😌', '🤔', '🧐', '💭', '❓', '👍', '✅', '🙌', '💪', '🎉', '🙏', '🤝', '😮', '👀', '⚠️', '💡', '😔', '😢', '😅', '🙇', '🥳', '✨', '🌟', '💻', '🤖', '📚', '🔧', '❤️', '⭐', '🔥', '🚀', '📌', '😂', '🤗']) {
-  test(`supports configured reaction ${emoji}`, async () => {
-    const { I, calls } = fixture();
-    I.appendMessage(message());
-    await flush();
-    deliver(calls[0], { emoji, author: 'Neko' });
-    await flush();
-    assert.equal(I.state.messages[0].reaction.emoji, emoji);
-    assert.equal(I.state.messages[0].blocks[0].text, 'hello user-1');
-  });
-}

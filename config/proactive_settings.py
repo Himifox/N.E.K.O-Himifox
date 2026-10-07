@@ -130,7 +130,11 @@ EMOTION_ANALYSIS_MAX_TOKENS = 40
 - 上游：LLM 输出（注意：Gemini 可能返回 markdown 包裹，留 40 token 余量）。"""
 
 
-# Optional message reactions use the configured emotion model in the background.
-MESSAGE_REACTION_INPUT_MAX_TOKENS = 2048
-MESSAGE_REACTION_OUTPUT_MAX_TOKENS = 256
-MESSAGE_REACTION_TIMEOUT_SECONDS = 8
+# Reuse the existing outward emotion decision; no additional inference.
+MESSAGE_REACTION_CONFIDENCE_THRESHOLD = 0.72
+MESSAGE_REACTION_EMOJIS_BY_EMOTION = {
+    "happy": ("😊", "😄", "🥰", "✨", "🎉"),
+    "sad": ("😢", "🥺", "🤗", "💧"),
+    "surprised": ("😮", "😲", "👀", "❗"),
+    "angry": ("😤", "😠", "💢", "😾"),
+}

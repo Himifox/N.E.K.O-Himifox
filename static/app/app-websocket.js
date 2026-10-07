@@ -1821,6 +1821,8 @@
     function finalizeAssistantTurn(assistantTurnId, options) {
         options = options || {};
         var enableMusic = options.enableMusic !== false;
+        var reactionTarget = options.enableReactions !== false ? S.messageReactionTarget : null;
+        S.messageReactionTarget = null;
 
         var bufferedFullText = typeof window._geminiTurnFullText === 'string'
             ? window._geminiTurnFullText
@@ -1857,6 +1859,9 @@
                 });
                 var emotionResult = await Promise.race([emotionPromise, timeoutPromise]);
                 if (emotionResult && emotionResult.emotion) {
+                    if (typeof window.applyMessageReactionFromEmotion === 'function') {
+                        try { window.applyMessageReactionFromEmotion(reactionTarget, emotionResult); } catch (_) { }
+                    }
                     console.log(window.t('console.emotionAnalysisComplete'), emotionResult);
                     if (typeof window.applyEmotion === 'function') window.applyEmotion(emotionResult.emotion);
                     if (assistantTurnId) {
@@ -1925,6 +1930,10 @@
         );
         window._nekoAssistantTurnId = S.assistantTurnId;
         S.assistantTurnStartedAt = Date.now();
+        S.messageReactionTarget = typeof window.captureMessageReactionTarget === 'function'
+            && !(responseMeta && (responseMeta.passthrough
+                || ['proactive', 'agent_callback', 'game_route', 'new_user_icebreaker'].indexOf(responseMeta.source) >= 0))
+            ? window.captureMessageReactionTarget(resolveAssistantRequestId(requestId, responseMeta)) : null;
         clearPendingAssistantTurnStart();
         emitAssistantLifecycleEvent('neko-assistant-turn-start', {
             turnId: S.assistantTurnId,
@@ -3771,6 +3780,13 @@
                         }
                     } catch (_) { }
 
+                    if (['ASR_RECOVERY_STARTED', 'ASR_RECOVERY_READY', 'ASR_RECOVERY_FAILED',
+                        'ASR_TURN_INCOMPLETE'].includes(statusCode)) {
+                        if (_thisSocket !== S.socket) return;
+                        window.appAudioCapture?.handleAutomaticRecoveryStatus(statusCode, statusDetails);
+                        return;
+                    }
+
                     if (statusCode === 'ASR_INPUT_CONNECTING'
                         || statusCode === 'ASR_INPUT_DELIVERY_FAILED'
                         || statusCode === 'ASR_INPUT_DELIVERY_UNCERTAIN') {
@@ -3790,6 +3806,13 @@
                     }
 
                     if (statusCode === 'ASR_LIFECYCLE_STATE') {
+                        if (statusDetails?.recovery_id != null) {
+                            if (_thisSocket !== S.socket) return;
+                            const accepted = statusDetails.state === 'blocked'
+                                ? window.appAudioCapture?.handleAutomaticRecoveryBlocked(statusDetails)
+                                : window.appAudioCapture?.matchesAutomaticRecoveryOperation(statusDetails);
+                            if (!accepted) return;
+                        }
                         var lifecycleState = (statusDetails && statusDetails.state) || '';
                         var allowedLifecycleStates = [
                             'off', 'local_listen', 'prewarming', 'active',
@@ -5224,7 +5247,7 @@
                     // 与正常 'turn end' 走同一套收尾（emotion + 字幕）。music 关闭——
                     // 主动消息不自动放歌；也不在此调 scheduleProactiveChat（见上方
                     // "skipping proactive chat schedule"），防 proactive 自触发。
-                    finalizeAssistantTurn(agentCallbackTurnId, { enableMusic: false });
+                    finalizeAssistantTurn(agentCallbackTurnId, { enableMusic: false, enableReactions: false });
 
                 // -------- system turn end --------
                 } else if (response.type === 'system' && response.data === 'turn end') {

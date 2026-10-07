@@ -2119,121 +2119,66 @@
         return I.state.composerAttachments;
     }
 
-    var reactionRequests = new Map();
+    var reactionGeneration = 0;
+    var reactionCandidates = new Map();
     var reactionAttempts = new Set();
-    var reactionQueue = new Map();
-    var REACTION_EMOJIS = ['😊', '😄', '😃', '🙂', '😌', '🤔', '🧐', '💭', '❓', '👍', '✅', '🙌', '💪', '🎉', '🙏', '🤝', '😮', '👀', '⚠️', '💡', '😔', '😢', '😅', '🙇', '🥳', '✨', '🌟', '💻', '🤖', '📚', '🔧', '❤️', '⭐', '🔥', '🚀', '📌', '😂', '🤗'];
+    var REACTION_EMOJIS = ['😊', '😄', '🥰', '✨', '🎉', '😢', '🥺', '🤗', '💧', '😮', '😲', '👀', '❗', '😤', '😠', '💢', '😾'];
 
     function getReactionCharacterName() {
         return (window.appState && window.appState.lanlan_name)
             || (window.lanlan_config && window.lanlan_config.lanlan_name) || '';
     }
-
     function getReactionMessageText(message) {
         return (message.blocks || []).filter(function (block) {
             return block && block.type === 'text' && typeof block.text === 'string';
         }).map(function (block) { return block.text; }).join('\n').trim();
     }
-
     function cancelMessageReactions() {
-        reactionRequests.forEach(function (request) { request.abort(); });
-        reactionRequests.clear();
+        reactionGeneration++;
         reactionAttempts.clear();
-        reactionQueue.clear();
+        reactionCandidates.clear();
     }
-
     function pruneMessageReactions() {
-        var ids = new Set(I.state.messages.map(function (message) { return message.id; }));
+        var ids = new Set(I.state.messages.map(function (m) { return m.id; }));
         reactionAttempts.forEach(function (id) { if (!ids.has(id)) reactionAttempts.delete(id); });
-        reactionQueue.forEach(function (_, id) { if (!ids.has(id)) reactionQueue.delete(id); });
-        reactionRequests.forEach(function (request, id) {
-            if (!ids.has(id)) {
-                request.abort();
-                reactionRequests.delete(id);
-            }
+        reactionCandidates.forEach(function (target, id) {
+            if (!I.state.messages.some(function (m) { return m === target.message; })) reactionCandidates.delete(id);
         });
-        drainMessageReactions();
     }
-
-    function drainMessageReactions() {
-        while (reactionRequests.size < 3 && reactionQueue.size > 0) {
-            var pending = reactionQueue.values().next().value;
-            reactionQueue.delete(pending.id);
-            var current = I.state.messages.find(function (item) { return item.id === pending.id; });
-            if (!current || current.role !== 'user' || current.status !== 'sent' || current.reaction
-                    || isYuiGuideChatMessage(current) || isNewUserIcebreakerChatMessage(current)
-                    || getReactionCharacterName() !== pending.name || getReactionMessageText(current) !== pending.text
-                    || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) continue;
-            startMessageReaction(pending);
-        }
-    }
-
     function scheduleMessageReaction(message) {
-        if (!message || message.role !== 'user' || message.status !== 'sent'
-                || message.reaction || reactionAttempts.has(message.id)
+        if (!message || message.role !== 'user' || message.status !== 'sent' || message.reaction || reactionAttempts.has(message.id)
                 || isYuiGuideChatMessage(message) || isNewUserIcebreakerChatMessage(message)
                 || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) return;
-        var name = getReactionCharacterName();
         var text = getReactionMessageText(message);
-        if (!name || !text || typeof fetch !== 'function' || typeof AbortController !== 'function') return;
-        var id = message.id;
-        var index = I.state.messages.findIndex(function (item) { return item.id === id; });
-        var context = I.state.messages.slice(0, index).filter(function (item) {
-            return (item.role === 'user' || item.role === 'assistant')
-                && item.status !== 'failed' && item.status !== 'sending'
-                && item.status !== 'streaming' && getReactionMessageText(item);
-        }).slice(-3).map(function (item) {
-            return { role: item.role, text: getReactionMessageText(item).slice(0, 2000) };
-        });
-        reactionAttempts.add(id);
-        reactionQueue.set(id, { id: id, name: name, text: text, context: context });
-        drainMessageReactions();
+        var name = getReactionCharacterName();
+        var previous = reactionCandidates.get(message.id);
+        if (text && name) reactionCandidates.set(message.id, { message: message, text: text, name: name,
+            generation: reactionGeneration, requestId: previous ? previous.requestId : (window._lastSubmittedRequestId || null) });
     }
-
-    function startMessageReaction(pending) {
-        var id = pending.id;
-        var name = pending.name;
-        var text = pending.text;
-        var context = pending.context;
-        var controller = new AbortController();
-        reactionRequests.set(id, controller);
-        var timeout;
-        var deadline = new Promise(function (resolve) {
-            timeout = setTimeout(function () { controller.abort(); resolve(null); }, 10000);
-        });
-        var request = (async function () {
-            var headers = { 'Content-Type': 'application/json' };
-            var security = window.nekoLocalMutationSecurity;
-            if (security && typeof security.getMutationHeaders === 'function') {
-                Object.assign(headers, await security.getMutationHeaders());
-            }
-            if (controller.signal.aborted) return null;
-            var response = await fetch('/api/chat/reaction', {
-                method: 'POST', headers: headers, signal: controller.signal,
-                body: JSON.stringify({ message_id: id, lanlan_name: name, text: text.slice(0, 6000), context: context })
-            });
-            return response.ok ? response.json() : null;
-        })();
-        Promise.race([request, deadline]).then(function (result) {
-            if (reactionRequests.get(id) !== controller || controller.signal.aborted
-                    || getReactionCharacterName() !== name || !result || result.message_id !== id) return;
-            var current = I.state.messages.find(function (item) { return item.id === id; });
-            if (!current || current.role !== 'user' || current.status !== 'sent'
-                    || getReactionMessageText(current) !== text) return;
-            var reaction = result.reaction;
-            if (!reaction || REACTION_EMOJIS.indexOf(reaction.emoji) < 0 || reaction.author !== name) return;
-            I.updateMessage(id, { reaction: { emoji: reaction.emoji, author: name } });
-            if (window.appChatExport && typeof window.appChatExport.refreshMessageReaction === 'function') {
-                window.appChatExport.refreshMessageReaction(id);
-            }
-        }).catch(function () {
-            // Reactions are optional; leave chat delivery and reply handling alone.
-        }).finally(function () {
-            clearTimeout(timeout);
-            if (reactionRequests.get(id) === controller) reactionRequests.delete(id);
-            drainMessageReactions();
-        });
-    }
+    window.captureMessageReactionTarget = function (requestId) {
+        var targets = Array.from(reactionCandidates.values());
+        var target = requestId
+            ? targets.find(function (item) { return item.requestId === requestId; })
+            : targets[targets.length - 1];
+        // Voice turns may not carry a request ID; never guess for a mismatched text request.
+        if (!target) return null;
+        reactionCandidates.delete(target.message.id);
+        reactionAttempts.add(target.message.id);
+        return target;
+    };
+    window.applyMessageReactionFromEmotion = function (target, result) {
+        if (!target || target.generation !== reactionGeneration || getReactionCharacterName() !== target.name
+                || !result || result.error || !result.reaction
+                || result.reaction.author !== target.name || REACTION_EMOJIS.indexOf(result.reaction.emoji) < 0
+                || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) return;
+        var current = I.state.messages.find(function (m) { return m.id === target.message.id; });
+        if (current !== target.message || current.role !== 'user' || current.status !== 'sent'
+                || current.reaction || getReactionMessageText(current) !== target.text) return;
+        I.updateMessage(current.id, { reaction: { emoji: result.reaction.emoji, author: target.name } });
+        if (window.appChatExport && typeof window.appChatExport.refreshMessageReaction === 'function') {
+            window.appChatExport.refreshMessageReaction(current.id);
+        }
+    };
 
     var MAX_MESSAGES = 50;
 
