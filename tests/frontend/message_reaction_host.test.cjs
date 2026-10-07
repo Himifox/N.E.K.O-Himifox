@@ -113,6 +113,18 @@ test('overlapping replies use request IDs captured when users send',()=>{
  f.window.applyMessageReactionFromEmotion(second,result('😾'));f.window.applyMessageReactionFromEmotion(first,result('😊'));
  assert.deepEqual(Array.from(f.I.state.messages,m=>m.reaction.emoji),['😊','😾']);
 });
+test('overlapping optimistic sends retain identity through reversed completion',()=>{
+ const f=fixture();f.window._lastSubmittedRequestId='r1';
+ f.I.appendMessage(message('u1',{status:'sending'}));
+ f.window._lastSubmittedRequestId='r2';f.I.appendMessage(message('u2',{status:'sending'}));
+ assert.equal(f.window.captureMessageReactionTarget('r1'),null);
+ f.I.updateMessage('u2',{status:'sent'});f.I.updateMessage('u1',{status:'sent'});
+ const first=f.window.captureMessageReactionTarget('r1'),second=f.window.captureMessageReactionTarget('r2');
+ assert.equal(first.message.id,'u1');assert.equal(second.message.id,'u2');
+ f.window.applyMessageReactionFromEmotion(first,result('😊'));
+ f.window.applyMessageReactionFromEmotion(second,result('😢'));
+ assert.deepEqual(Array.from(f.I.state.messages,m=>m.reaction.emoji),['😊','😢']);
+});
 function finalizeFixture(analysis) {
  const websocket=fs.readFileSync(path.join(__dirname,'../../static/app/app-websocket.js'),'utf8');
  const source=websocket.slice(websocket.indexOf('    function finalizeAssistantTurn('),websocket.indexOf('    function ensureAssistantTurnStarted('));

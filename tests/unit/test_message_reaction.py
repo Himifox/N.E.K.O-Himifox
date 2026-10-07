@@ -65,6 +65,11 @@ def test_threshold_and_random_choice_are_configurable(emotion, monkeypatch):
         "not json",
         '{"emotion":"neutral","confidence":1}',
         '{"emotion":"happy","confidence":"bad"}',
+        '{"confidence":0.7}',
+        '{"emotion":"unknown","confidence":0.7}',
+        '{"emotion":null,"confidence":0.7}',
+        '{"emotion":123,"confidence":0.7}',
+        '{"emotion":["happy"],"confidence":0.7}',
     ],
 )
 def test_endpoint_invokes_existing_model_once_and_degrades_safely(
@@ -98,6 +103,9 @@ def test_endpoint_invokes_existing_model_once_and_degrades_safely(
     monkeypatch.setattr(emotion, "get_config_manager", lambda: Config())
     monkeypatch.setattr(emotion, "create_chat_llm_async", factory)
     monkeypatch.setattr(emotion, "_resolve_emotion_prompt_language", lambda *args: "en")
+    # Avatar heuristics can still recover an emotion, but an invalid model
+    # decision must never gain a reaction through that fallback.
+    monkeypatch.setattr(emotion, "_infer_emotion_from_text", lambda text: ("happy", 4))
     result = asyncio.run(emotion.emotion_analysis(Request()))
     assert len(calls) == 1
     assert bool(result["reaction"]) == (

@@ -2146,7 +2146,9 @@
         });
     }
     function scheduleMessageReaction(message) {
-        if (!message || message.role !== 'user' || message.status !== 'sent' || message.reaction || reactionAttempts.has(message.id)
+        // Capture identity when the optimistic message is created, before a
+        // later send can replace the shared submission ID during async work.
+        if (!message || message.role !== 'user' || ['sending', 'sent'].indexOf(message.status) < 0 || message.reaction || reactionAttempts.has(message.id)
                 || isYuiGuideChatMessage(message) || isNewUserIcebreakerChatMessage(message)
                 || (typeof I.isCatLocalChatActive === 'function' && I.isCatLocalChatActive())) return;
         var text = getReactionMessageText(message);
@@ -2160,7 +2162,9 @@
         // guess which user message belongs to such a reply from arrival order.
         if (!requestId) return null;
         var targets = Array.from(reactionCandidates.values());
-        var target = targets.find(function (item) { return item.requestId === requestId; });
+        var target = targets.find(function (item) {
+            return item.requestId === requestId && item.message.status === 'sent';
+        });
         if (!target) return null;
         reactionCandidates.delete(target.message.id);
         reactionAttempts.add(target.message.id);

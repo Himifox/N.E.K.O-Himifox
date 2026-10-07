@@ -1012,9 +1012,23 @@ async def emotion_analysis(request: Request):
                 raw_confidence = result.get("confidence", 0.5)
                 emotion = _normalize_emotion_label(raw_emotion, raw_confidence)
                 confidence = _coerce_emotion_confidence(raw_confidence)
+                # Unknown model labels cannot become reaction-eligible through
+                # avatar heuristics. Keep the avatar normalization unchanged.
+                reaction_label = (
+                    raw_emotion.strip().lower() if isinstance(raw_emotion, str) else ""
+                )
+                reaction_normalized_label = re.sub(r"[\s\-_]+", " ", reaction_label)
+                reaction_compact_label = re.sub(
+                    r"[\W_]+", "", reaction_label, flags=re.UNICODE
+                )
+                reaction_label_valid = "emotion" in result and (
+                    reaction_normalized_label in _EMOTION_NORMALIZED_ALIAS_LOOKUP
+                    or reaction_compact_label in _EMOTION_COMPACT_ALIAS_LOOKUP
+                )
                 try:
                     reaction_score = float(raw_confidence)
-                    reaction_eligible = (not isinstance(raw_confidence, bool)
+                    reaction_eligible = (reaction_label_valid
+                                         and not isinstance(raw_confidence, bool)
                                          and math.isfinite(reaction_score)
                                          and 0.0 <= reaction_score <= 1.0)
                 except (TypeError, ValueError):
