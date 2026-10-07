@@ -22,6 +22,7 @@ function fixture() {
   const window = {
     __appReactChatWindowParts: I,
     appState: { lanlan_name: 'Neko' },
+    _lastSubmittedRequestId: 'test-request',
     nekoLocalMutationSecurity: { async getMutationHeaders() { return { 'X-CSRF-Token': 'test-csrf' }; } },
   };
   const ctx = vm.createContext({
@@ -49,7 +50,7 @@ function message(id = 'user-1', extra = {}) {
 const result = emoji => ({ emotion: 'happy', confidence: 0.9, reaction: { emoji, author: 'Neko' } });
 test('reuses existing emotion result without any independent request and refreshes export', () => {
   const {I,window,calls}=fixture(); let refreshed; window.appChatExport={refreshMessageReaction(id){refreshed=id;}};
-  I.appendMessage(message()); const target=window.captureMessageReactionTarget();
+  I.appendMessage(message()); const target=window.captureMessageReactionTarget('test-request');
   I.appendMessage(message('next')); window.applyMessageReactionFromEmotion(target,result('🥰'));
   assert.equal(I.state.messages[0].reaction.emoji,'🥰'); assert.equal(I.state.messages[1].reaction,undefined);
   assert.equal(refreshed,'user-1'); assert.equal(calls.length,0);
@@ -58,32 +59,51 @@ test('reuses existing emotion result without any independent request and refresh
 });
 for(const mutate of [f=>f.I.clearMessages(),f=>f.I.setMessages([message()]),f=>f.I.removeMessage('user-1'),f=>f.I.updateMessage('user-1',{blocks:[{type:'text',text:'edited'}]}),f=>f.I.updateMessage('user-1',{status:'failed'}),f=>{f.window.appState.lanlan_name='Other';},f=>{f.I.isCatLocalChatActive=()=>true;}]) {
  test('stale emotion cannot update replaced, edited, failed or different session messages '+mutate.toString(),()=>{
-  const f=fixture();f.I.appendMessage(message()); const target=f.window.captureMessageReactionTarget(); mutate(f);
+  const f=fixture();f.I.appendMessage(message()); const target=f.window.captureMessageReactionTarget('test-request'); mutate(f);
   f.window.applyMessageReactionFromEmotion(target,result('🎉')); assert.ok(f.I.state.messages.every(m=>!m.reaction));
  });
 }
 test('restored, tutorial, image-only, failed and local chat messages are ineligible',()=>{
- const f=fixture();f.I.setMessages([message()]);assert.equal(f.window.captureMessageReactionTarget(),null);
+ const f=fixture();f.I.setMessages([message()]);assert.equal(f.window.captureMessageReactionTarget('test-request'),null);
  for(const m of [message('yui-guide-demo'),message('icebreaker-user-demo'),message('image',{blocks:[{type:'image',url:'/a'}]}),message('failed',{status:'failed'}),message('assistant',{role:'assistant'})]){
-  f.I.appendMessage(m);assert.equal(f.window.captureMessageReactionTarget(),null);
+  f.I.appendMessage(m);assert.equal(f.window.captureMessageReactionTarget('test-request'),null);
  }
- f.I.isCatLocalChatActive=()=>true;f.I.appendMessage(message('local'));assert.equal(f.window.captureMessageReactionTarget(),null);assert.equal(f.calls.length,0);
+ f.I.isCatLocalChatActive=()=>true;f.I.appendMessage(message('local'));assert.equal(f.window.captureMessageReactionTarget('test-request'),null);assert.equal(f.calls.length,0);
 });
 test('sending waits for sent; null results never rearm on metadata updates',()=>{
- const f=fixture(); f.I.appendMessage(message('u',{status:'sending'}));assert.equal(f.window.captureMessageReactionTarget(),null);
- f.I.updateMessage('u',{status:'sent'});const target=f.window.captureMessageReactionTarget();assert.ok(target);
+ const f=fixture(); f.I.appendMessage(message('u',{status:'sending'}));assert.equal(f.window.captureMessageReactionTarget('test-request'),null);
+ f.I.updateMessage('u',{status:'sent'});const target=f.window.captureMessageReactionTarget('test-request');assert.ok(target);
  f.window.applyMessageReactionFromEmotion(target,{emotion:'neutral',reaction:null});f.I.updateMessage('u',{time:'11:00'});
- assert.equal(f.window.captureMessageReactionTarget(),null);assert.equal(f.calls.length,0);
+ assert.equal(f.window.captureMessageReactionTarget('test-request'),null);assert.equal(f.calls.length,0);
 });
 test('request identity mismatch never attaches a reply to a later user',()=>{
  const f=fixture();f.window._lastSubmittedRequestId='second';f.I.appendMessage(message());
  assert.equal(f.window.captureMessageReactionTarget('first'),null);
 });
+test('late voice transcripts never shift reactions onto the previous turn',()=>{
+ const f=fixture();f.window._lastSubmittedRequestId=null;
+ const first=f.window.captureMessageReactionTarget();
+ f.I.appendMessage(message('v1',{blocks:[{type:'text',text:'I got the job!'}]}));
+ const second=f.window.captureMessageReactionTarget();
+ f.I.appendMessage(message('v2',{blocks:[{type:'text',text:'my cat is sick'}]}));
+ f.window.applyMessageReactionFromEmotion(first,result('😊'));
+ f.window.applyMessageReactionFromEmotion(second,result('😢'));
+ assert.equal(first,null);assert.equal(second,null);
+ assert.ok(f.I.state.messages.every(m=>!m.reaction));
+});
+test('an unidentified voice reply cannot consume an abandoned text candidate',()=>{
+ const f=fixture();f.I.appendMessage(message('abandoned'));
+ const target=f.window.captureMessageReactionTarget();
+ f.window.applyMessageReactionFromEmotion(target,result('😢'));
+ assert.equal(target,null);assert.equal(f.I.state.messages[0].reaction,undefined);
+ // A later reply with the actual identity can still safely find its target.
+ assert.equal(f.window.captureMessageReactionTarget('test-request').message.id,'abandoned');
+});
 for(const emoji of ['😊','😄','🥰','✨','🎉','😢','🥺','🤗','💧','😮','😲','👀','❗','😤','😠','💢','😾']) test('accepts configured candidate '+emoji,()=>{
- const f=fixture();f.I.appendMessage(message());f.window.applyMessageReactionFromEmotion(f.window.captureMessageReactionTarget(),result(emoji));assert.equal(f.I.state.messages[0].reaction.emoji,emoji);
+ const f=fixture();f.I.appendMessage(message());f.window.applyMessageReactionFromEmotion(f.window.captureMessageReactionTarget('test-request'),result(emoji));assert.equal(f.I.state.messages[0].reaction.emoji,emoji);
 });
 for(const r of [null,{error:'failed'},result('not-emoji'),{reaction:{emoji:'😊',author:'Other'}}]) test('invalid result is ignored '+JSON.stringify(r),()=>{
- const f=fixture();f.I.appendMessage(message());f.window.applyMessageReactionFromEmotion(f.window.captureMessageReactionTarget(),r);assert.equal(f.I.state.messages[0].reaction,undefined);
+ const f=fixture();f.I.appendMessage(message());f.window.applyMessageReactionFromEmotion(f.window.captureMessageReactionTarget('test-request'),r);assert.equal(f.I.state.messages[0].reaction,undefined);
 });
 
 test('overlapping replies use request IDs captured when users send',()=>{

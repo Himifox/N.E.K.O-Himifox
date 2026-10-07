@@ -2156,11 +2156,11 @@
             generation: reactionGeneration, requestId: previous ? previous.requestId : (window._lastSubmittedRequestId || null) });
     }
     window.captureMessageReactionTarget = function (requestId) {
+        // Transcripts without turn identity can arrive after reply start. Never
+        // guess which user message belongs to such a reply from arrival order.
+        if (!requestId) return null;
         var targets = Array.from(reactionCandidates.values());
-        var target = requestId
-            ? targets.find(function (item) { return item.requestId === requestId; })
-            : targets[targets.length - 1];
-        // Voice turns may not carry a request ID; never guess for a mismatched text request.
+        var target = targets.find(function (item) { return item.requestId === requestId; });
         if (!target) return null;
         reactionCandidates.delete(target.message.id);
         reactionAttempts.add(target.message.id);
