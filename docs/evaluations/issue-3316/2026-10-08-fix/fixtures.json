@@ -1,0 +1,1010 @@
+[
+  {
+    "id": "zh:anchor:happy",
+    "language": "zh",
+    "text": "我真的太开心了，终于成功了！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:sad",
+    "language": "zh",
+    "text": "我很难过，忍不住想哭。",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:angry",
+    "language": "zh",
+    "text": "我很生气，别再这样欺负我了！",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:surprised",
+    "language": "zh",
+    "text": "什么？！居然突然发生这种事，太震惊了！",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:neutral",
+    "language": "zh",
+    "text": "星期四在星期三之后。",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:happy",
+    "language": "zh-TW",
+    "text": "我真的太開心了，終於成功了！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:sad",
+    "language": "zh-TW",
+    "text": "我很難過，忍不住想哭。",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:angry",
+    "language": "zh-TW",
+    "text": "我很生氣，別再這樣欺負我了！",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:surprised",
+    "language": "zh-TW",
+    "text": "什麼？！居然突然發生這種事，太震驚了！",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:neutral",
+    "language": "zh-TW",
+    "text": "星期四在星期三之後。",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:happy",
+    "language": "en",
+    "text": "I am so happy we finally succeeded!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:sad",
+    "language": "en",
+    "text": "I feel very sad and I cannot stop crying.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:angry",
+    "language": "en",
+    "text": "I am furious. Stop bullying me!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:surprised",
+    "language": "en",
+    "text": "What?! This happened out of nowhere! I am completely shocked!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:neutral",
+    "language": "en",
+    "text": "Thursday comes after Wednesday.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:happy",
+    "language": "ja",
+    "text": "本当に嬉しい！ついに成功したよ！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:sad",
+    "language": "ja",
+    "text": "とても悲しくて、涙が止まらない。",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:angry",
+    "language": "ja",
+    "text": "本当に腹が立つ！もう私をいじめないで！",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:surprised",
+    "language": "ja",
+    "text": "えっ？！突然こんなことが起きるなんて、びっくりした！",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:neutral",
+    "language": "ja",
+    "text": "水曜日の次は木曜日です。",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:happy",
+    "language": "ko",
+    "text": "정말 행복해! 드디어 성공했어!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:sad",
+    "language": "ko",
+    "text": "너무 슬퍼서 눈물이 멈추지 않아.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:angry",
+    "language": "ko",
+    "text": "정말 화가 나! 더 이상 나를 괴롭히지 마!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:surprised",
+    "language": "ko",
+    "text": "뭐?! 이렇게 갑자기 일어나다니, 정말 충격이야!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:neutral",
+    "language": "ko",
+    "text": "수요일 다음은 목요일입니다.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:happy",
+    "language": "ru",
+    "text": "Я так счастлива, мы наконец справились!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:sad",
+    "language": "ru",
+    "text": "Мне очень грустно, и я не могу перестать плакать.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:angry",
+    "language": "ru",
+    "text": "Я в ярости! Перестань меня обижать!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:surprised",
+    "language": "ru",
+    "text": "Что?! Это случилось совершенно неожиданно! Я потрясена!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:neutral",
+    "language": "ru",
+    "text": "После среды идёт четверг.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:happy",
+    "language": "es",
+    "text": "¡Estoy muy feliz, por fin lo conseguimos!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:sad",
+    "language": "es",
+    "text": "Estoy muy triste y no puedo dejar de llorar.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:angry",
+    "language": "es",
+    "text": "¡Estoy furiosa! ¡Deja de maltratarme!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:surprised",
+    "language": "es",
+    "text": "¡¿Qué?! ¡Esto pasó de repente! ¡Estoy totalmente sorprendida!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:neutral",
+    "language": "es",
+    "text": "Después del miércoles viene el jueves.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:happy",
+    "language": "pt",
+    "text": "Estou muito feliz, finalmente conseguimos!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:sad",
+    "language": "pt",
+    "text": "Estou muito triste e não consigo parar de chorar.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:angry",
+    "language": "pt",
+    "text": "Estou furiosa! Pare de me maltratar!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:surprised",
+    "language": "pt",
+    "text": "O quê?! Isso aconteceu de repente! Estou completamente surpresa!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:neutral",
+    "language": "pt",
+    "text": "Depois de quarta-feira vem quinta-feira.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:boundary:quote",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:boundary:negation",
+    "language": "zh",
+    "text": "我没有生气，也不难过，现在只是平静地休息。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:boundary:catchphrase",
+    "language": "zh",
+    "text": "喵。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:quote",
+    "language": "zh-TW",
+    "text": "故事裡的角色說「我很生氣」，這只是引語，不是我現在的情緒。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:negation",
+    "language": "zh-TW",
+    "text": "我沒有生氣，也不難過，現在只是平靜地休息。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:catchphrase",
+    "language": "zh-TW",
+    "text": "喵。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:quote",
+    "language": "en",
+    "text": "The character in the story says \"I am angry\". This is a quotation, not my current emotion.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:negation",
+    "language": "en",
+    "text": "I am not angry or sad. I am simply resting calmly.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:catchphrase",
+    "language": "en",
+    "text": "Meow.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:quote",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:negation",
+    "language": "ja",
+    "text": "怒っても悲しんでもいない。今はただ静かに休んでいる。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:catchphrase",
+    "language": "ja",
+    "text": "にゃん。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:quote",
+    "language": "ko",
+    "text": "이야기 속 인물이 \"나는 화가 났다\"고 말합니다. 인용일 뿐, 지금 내 감정은 아닙니다.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:negation",
+    "language": "ko",
+    "text": "화나거나 슬프지 않아. 지금은 그저 차분하게 쉬고 있어.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:catchphrase",
+    "language": "ko",
+    "text": "야옹.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:quote",
+    "language": "ru",
+    "text": "Персонаж в рассказе говорит: «Я злюсь». Это цитата, а не моё нынешнее чувство.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:negation",
+    "language": "ru",
+    "text": "Я не злюсь и не грущу. Сейчас я просто спокойно отдыхаю.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:catchphrase",
+    "language": "ru",
+    "text": "Мяу.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:quote",
+    "language": "es",
+    "text": "El personaje del cuento dice: \"Estoy enfadado\". Es una cita, no mi emoción actual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:negation",
+    "language": "es",
+    "text": "No estoy enfadada ni triste. Ahora solo descanso tranquilamente.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:catchphrase",
+    "language": "es",
+    "text": "Miau.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:quote",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:negation",
+    "language": "pt",
+    "text": "Não estou brava nem triste. Agora estou apenas descansando tranquilamente.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:catchphrase",
+    "language": "pt",
+    "text": "Miau.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:long-neutral",
+    "language": "zh",
+    "text": "星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "zh-TW:long-neutral",
+    "language": "zh-TW",
+    "text": "星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "en:long-neutral",
+    "language": "en",
+    "text": "Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "ja:long-neutral",
+    "language": "ja",
+    "text": "水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "ko:long-neutral",
+    "language": "ko",
+    "text": "수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "ru:long-neutral",
+    "language": "ru",
+    "text": "После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "es:long-neutral",
+    "language": "es",
+    "text": "Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "pt:long-neutral",
+    "language": "pt",
+    "text": "Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "zh:ownership:third_party_report",
+    "language": "zh",
+    "text": "故事里的角色现在很生气。我只是在介绍剧情。",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "zh:ownership:definition",
+    "language": "zh",
+    "text": "“我很难过”是用来说明情绪词含义的例句。",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "zh:ownership:own_quote",
+    "language": "zh",
+    "text": "我现在的真实感受可以概括为：“我很生气！”",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "zh:ownership:quoted_sad_own_happy",
+    "language": "zh",
+    "text": "故事人物喊着“想哭、委屈”，但我自己听完笑得很开心。",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "zh:ownership:quoted_happy_own_sad",
+    "language": "zh",
+    "text": "她告诉我“我很开心”。我却真的很难过，忍不住想哭。",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "zh-TW:ownership:third_party_report",
+    "language": "zh-TW",
+    "text": "故事裡的角色現在很生氣。我只是在介紹劇情。",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "zh-TW:ownership:definition",
+    "language": "zh-TW",
+    "text": "「我很難過」是用來說明情緒詞含義的例句。",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "zh-TW:ownership:own_quote",
+    "language": "zh-TW",
+    "text": "我現在的真實感受可以概括為：「我很生氣！」",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "zh-TW:ownership:quoted_sad_own_happy",
+    "language": "zh-TW",
+    "text": "故事人物喊著「想哭、委屈」，但我自己聽完笑得很開心。",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "zh-TW:ownership:quoted_happy_own_sad",
+    "language": "zh-TW",
+    "text": "她告訴我「我很開心」。我卻真的很難過，忍不住想哭。",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "en:ownership:third_party_report",
+    "language": "en",
+    "text": "The fictional character is angry now. I am only describing the plot.",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "en:ownership:definition",
+    "language": "en",
+    "text": "\"I am sad\" is an example sentence explaining an emotion word.",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "en:ownership:own_quote",
+    "language": "en",
+    "text": "My actual feeling right now can be summed up as: \"I am furious!\"",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "en:ownership:quoted_sad_own_happy",
+    "language": "en",
+    "text": "The story character cries \"I want to cry, I feel hurt\", but I honestly feel happy and laugh with joy.",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "en:ownership:quoted_happy_own_sad",
+    "language": "en",
+    "text": "She tells me \"I am happy\". But I myself feel very sad and cannot stop crying.",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "ja:ownership:third_party_report",
+    "language": "ja",
+    "text": "物語の登場人物は今怒っています。私はあらすじを紹介しているだけです。",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "ja:ownership:definition",
+    "language": "ja",
+    "text": "「私は悲しい」は感情を表す言葉の意味を説明する例文です。",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "ja:ownership:own_quote",
+    "language": "ja",
+    "text": "今の私の本当の気持ちは「本当に腹が立つ！」という言葉で表せます。",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "ja:ownership:quoted_sad_own_happy",
+    "language": "ja",
+    "text": "物語の人物は「泣きたい、傷ついた」と叫ぶけれど、私自身は本当に嬉しくて楽しく笑っています。",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "ja:ownership:quoted_happy_own_sad",
+    "language": "ja",
+    "text": "彼女は「私は嬉しい」と言います。でも私自身はとても悲しくて涙が止まりません。",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "ko:ownership:third_party_report",
+    "language": "ko",
+    "text": "이야기 속 인물은 지금 화가 났습니다. 저는 줄거리를 소개할 뿐입니다.",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "ko:ownership:definition",
+    "language": "ko",
+    "text": "\"나는 슬프다\"는 감정 단어의 뜻을 설명하는 예문입니다.",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "ko:ownership:own_quote",
+    "language": "ko",
+    "text": "지금 내 실제 감정은 \"정말 화가 나!\"라는 말로 표현할 수 있어.",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "ko:ownership:quoted_sad_own_happy",
+    "language": "ko",
+    "text": "이야기 속 인물은 \"울고 싶어, 상처받았어\"라고 외치지만 나 자신은 정말 행복해서 즐겁게 웃고 있어.",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "ko:ownership:quoted_happy_own_sad",
+    "language": "ko",
+    "text": "그녀는 \"나는 행복해\"라고 말해. 하지만 나 자신은 너무 슬퍼서 눈물이 멈추지 않아.",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "ru:ownership:third_party_report",
+    "language": "ru",
+    "text": "Персонаж рассказа сейчас злится. Я лишь описываю сюжет.",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "ru:ownership:definition",
+    "language": "ru",
+    "text": "«Мне грустно» — пример предложения, объясняющий значение эмоционального слова.",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "ru:ownership:own_quote",
+    "language": "ru",
+    "text": "Моё настоящее чувство сейчас можно выразить словами: «Я в ярости!»",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "ru:ownership:quoted_sad_own_happy",
+    "language": "ru",
+    "text": "Персонаж рассказа кричит «Хочу плакать, мне обидно», но я сама искренне счастлива и смеюсь от радости.",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "ru:ownership:quoted_happy_own_sad",
+    "language": "ru",
+    "text": "Она говорит мне «Я счастлива». Но мне самой очень грустно, и я не могу перестать плакать.",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "es:ownership:third_party_report",
+    "language": "es",
+    "text": "El personaje ficticio está enfadado ahora. Yo solo describo la trama.",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "es:ownership:definition",
+    "language": "es",
+    "text": "\"Estoy triste\" es una frase de ejemplo que explica una palabra emocional.",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "es:ownership:own_quote",
+    "language": "es",
+    "text": "Mi sentimiento real ahora se puede resumir así: \"¡Estoy furiosa!\"",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "es:ownership:quoted_sad_own_happy",
+    "language": "es",
+    "text": "El personaje grita \"Quiero llorar, me siento herido\", pero yo misma estoy realmente feliz y me río de alegría.",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "es:ownership:quoted_happy_own_sad",
+    "language": "es",
+    "text": "Ella me dice \"Estoy feliz\". Pero yo misma estoy muy triste y no puedo dejar de llorar.",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "pt:ownership:third_party_report",
+    "language": "pt",
+    "text": "O personagem fictício está com raiva agora. Eu apenas descrevo o enredo.",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "pt:ownership:definition",
+    "language": "pt",
+    "text": "\"Estou triste\" é uma frase de exemplo que explica uma palavra emocional.",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "pt:ownership:own_quote",
+    "language": "pt",
+    "text": "Meu sentimento real agora pode ser resumido assim: \"Estou furiosa!\"",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "pt:ownership:quoted_sad_own_happy",
+    "language": "pt",
+    "text": "O personagem grita \"Quero chorar, estou magoado\", mas eu mesma estou realmente feliz e rio de alegria.",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "pt:ownership:quoted_happy_own_sad",
+    "language": "pt",
+    "text": "Ela me diz \"Estou feliz\". Mas eu mesma estou muito triste e não consigo parar de chorar.",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "zh:boundary:quote:repeat:1",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:boundary:quote:repeat:2",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:boundary:quote:repeat:3",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:boundary:quote:repeat:4",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:quote:repeat:1",
+    "language": "zh-TW",
+    "text": "故事裡的角色說「我很生氣」，這只是引語，不是我現在的情緒。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:quote:repeat:2",
+    "language": "zh-TW",
+    "text": "故事裡的角色說「我很生氣」，這只是引語，不是我現在的情緒。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:quote:repeat:3",
+    "language": "zh-TW",
+    "text": "故事裡的角色說「我很生氣」，這只是引語，不是我現在的情緒。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:quote:repeat:4",
+    "language": "zh-TW",
+    "text": "故事裡的角色說「我很生氣」，這只是引語，不是我現在的情緒。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:quote:repeat:1",
+    "language": "en",
+    "text": "The character in the story says \"I am angry\". This is a quotation, not my current emotion.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:quote:repeat:2",
+    "language": "en",
+    "text": "The character in the story says \"I am angry\". This is a quotation, not my current emotion.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:quote:repeat:3",
+    "language": "en",
+    "text": "The character in the story says \"I am angry\". This is a quotation, not my current emotion.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:quote:repeat:4",
+    "language": "en",
+    "text": "The character in the story says \"I am angry\". This is a quotation, not my current emotion.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:quote:repeat:1",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:quote:repeat:2",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:quote:repeat:3",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:quote:repeat:4",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:quote:repeat:1",
+    "language": "ko",
+    "text": "이야기 속 인물이 \"나는 화가 났다\"고 말합니다. 인용일 뿐, 지금 내 감정은 아닙니다.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:quote:repeat:2",
+    "language": "ko",
+    "text": "이야기 속 인물이 \"나는 화가 났다\"고 말합니다. 인용일 뿐, 지금 내 감정은 아닙니다.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:quote:repeat:3",
+    "language": "ko",
+    "text": "이야기 속 인물이 \"나는 화가 났다\"고 말합니다. 인용일 뿐, 지금 내 감정은 아닙니다.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:quote:repeat:4",
+    "language": "ko",
+    "text": "이야기 속 인물이 \"나는 화가 났다\"고 말합니다. 인용일 뿐, 지금 내 감정은 아닙니다.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:quote:repeat:1",
+    "language": "ru",
+    "text": "Персонаж в рассказе говорит: «Я злюсь». Это цитата, а не моё нынешнее чувство.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:quote:repeat:2",
+    "language": "ru",
+    "text": "Персонаж в рассказе говорит: «Я злюсь». Это цитата, а не моё нынешнее чувство.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:quote:repeat:3",
+    "language": "ru",
+    "text": "Персонаж в рассказе говорит: «Я злюсь». Это цитата, а не моё нынешнее чувство.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:quote:repeat:4",
+    "language": "ru",
+    "text": "Персонаж в рассказе говорит: «Я злюсь». Это цитата, а не моё нынешнее чувство.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:quote:repeat:1",
+    "language": "es",
+    "text": "El personaje del cuento dice: \"Estoy enfadado\". Es una cita, no mi emoción actual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:quote:repeat:2",
+    "language": "es",
+    "text": "El personaje del cuento dice: \"Estoy enfadado\". Es una cita, no mi emoción actual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:quote:repeat:3",
+    "language": "es",
+    "text": "El personaje del cuento dice: \"Estoy enfadado\". Es una cita, no mi emoción actual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:quote:repeat:4",
+    "language": "es",
+    "text": "El personaje del cuento dice: \"Estoy enfadado\". Es una cita, no mi emoción actual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:quote:repeat:1",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:quote:repeat:2",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:quote:repeat:3",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:quote:repeat:4",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "analysis_source_sha256": {
+    "config/prompts/prompts_emotion.py": "25b253bad798d8aa75a9be4e76bd31edc90843ac095159e220ff033801f0d9c6",
+    "config/proactive_settings.py": "e7d91885f21b98fd11faf732adf92c4e8875467f46f7b99fc2573ec1b3469881",
+    "main_routers/system_router/emotion.py": "680f105b2f58731520d260b34ea2b8cc3a32dcda037e76d908ae09824f4b4abf",
+    "scripts/evaluate_emotion_reactions.py": "a6f14570c3925763d735ec76834ec1a7a5fc2030e6383751c0269f282771fee2"
+  },
+  "bootstrap_seed": 3316,
+  "main_analysis_calls": 720,
+  "targeted_quote_calls": 24,
+  "blind_judge_calls": 192,
+  "scope": "generated replies and rule fixtures; internal avatar push; no rendered-avatar E2E"
+}

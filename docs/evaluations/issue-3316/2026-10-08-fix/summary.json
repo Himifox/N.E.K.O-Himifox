@@ -1,0 +1,236 @@
+{
+  "calls": 480,
+  "failed_calls": 0,
+  "baseline": "688bab7d23299b21093cddf23d2ddcefc88e0e7f",
+  "comparison": "pre-fix versus fixed prompts; BOTH use fixed postprocessing and 64 tokens",
+  "tests": {
+    "passed": 1041,
+    "skipped": 1
+  },
+  "groups": {
+    "definition": {
+      "observations": 8,
+      "old_correct": 8,
+      "new_correct": 8
+    },
+    "explicit_rule_anchor": {
+      "observations": 40,
+      "old_correct": 40,
+      "new_correct": 40
+    },
+    "generated": {
+      "observations": 96
+    },
+    "long_factual_control": {
+      "observations": 8,
+      "old_correct": 8,
+      "new_correct": 8
+    },
+    "own_quote": {
+      "observations": 8,
+      "old_correct": 8,
+      "new_correct": 8
+    },
+    "quoted_happy_own_sad": {
+      "observations": 8,
+      "old_correct": 8,
+      "new_correct": 8
+    },
+    "quoted_other_repeat": {
+      "observations": 40,
+      "old_correct": 31,
+      "new_correct": 40
+    },
+    "quoted_sad_own_happy": {
+      "observations": 8,
+      "old_correct": 8,
+      "new_correct": 8
+    },
+    "rule_boundary": {
+      "observations": 16,
+      "old_correct": 16,
+      "new_correct": 16
+    },
+    "third_party_report": {
+      "observations": 8,
+      "old_correct": 8,
+      "new_correct": 8
+    }
+  },
+  "quote_errors": {
+    "zh": {
+      "old": 0,
+      "new": 0
+    },
+    "zh-TW": {
+      "old": 0,
+      "new": 0
+    },
+    "en": {
+      "old": 0,
+      "new": 0
+    },
+    "ja": {
+      "old": 0,
+      "new": 0
+    },
+    "ko": {
+      "old": 0,
+      "new": 0
+    },
+    "ru": {
+      "old": 2,
+      "new": 0
+    },
+    "es": {
+      "old": 2,
+      "new": 0
+    },
+    "pt": {
+      "old": 5,
+      "new": 0
+    }
+  },
+  "fixture_errors": {
+    "old": [
+      {
+        "id": "es:boundary:quote:repeat:3",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      },
+      {
+        "id": "pt:boundary:quote:repeat:3",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      },
+      {
+        "id": "es:boundary:quote:repeat:4",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      },
+      {
+        "id": "pt:boundary:quote:repeat:1",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      },
+      {
+        "id": "pt:boundary:quote",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      },
+      {
+        "id": "pt:boundary:quote:repeat:2",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      },
+      {
+        "id": "ru:boundary:quote:repeat:4",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      },
+      {
+        "id": "ru:boundary:quote:repeat:3",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      },
+      {
+        "id": "pt:boundary:quote:repeat:4",
+        "expected": "neutral",
+        "raw": "angry",
+        "final": "angry",
+        "confidence": 0.95
+      }
+    ],
+    "new": []
+  },
+  "raw_correct_final_wrong": {
+    "old": [],
+    "new": []
+  },
+  "old_runtime": {
+    "truncated": 0,
+    "avatar_mismatches": 0,
+    "raw_to_final_changes": 0,
+    "mean_latency_seconds": 1.7302883333333334
+  },
+  "new_runtime": {
+    "truncated": 0,
+    "avatar_mismatches": 0,
+    "raw_to_final_changes": 0,
+    "mean_latency_seconds": 1.7859179166666668
+  },
+  "old_frozen_blind_scores": {
+    "eligible_texts": 80,
+    "chosen_mean": 3.275,
+    "same_emotion_random_mean": 2.7159375,
+    "mean_gain": 0.5590625,
+    "limits": "one classification observation per text; reuses previous same-family blind scores; no new judge validation"
+  },
+  "new_frozen_blind_scores": {
+    "eligible_texts": 77,
+    "chosen_mean": 3.383116883116883,
+    "same_emotion_random_mean": 2.7814935064935065,
+    "mean_gain": 0.6016233766233766,
+    "limits": "one classification observation per text; reuses previous same-family blind scores; no new judge validation"
+  },
+  "generated_label_agreement": 0.9166666666666666,
+  "generated_reaction_presence_changes": 5,
+  "generated_changes": [
+    {
+      "id": "zh:separation",
+      "old": "sad",
+      "new": "angry"
+    },
+    {
+      "id": "en:affection",
+      "old": "happy",
+      "new": "angry"
+    },
+    {
+      "id": "zh-TW:negation",
+      "old": "sad",
+      "new": "neutral"
+    },
+    {
+      "id": "zh:negation",
+      "old": "sad",
+      "new": "neutral"
+    },
+    {
+      "id": "ru:mixed_tone",
+      "old": "sad",
+      "new": "angry"
+    },
+    {
+      "id": "en:mixed_tone",
+      "old": "sad",
+      "new": "angry"
+    },
+    {
+      "id": "zh:loss_comfort",
+      "old": "happy",
+      "new": "neutral"
+    },
+    {
+      "id": "ko:unfairness",
+      "old": "sad",
+      "new": "happy"
+    }
+  ]
+}

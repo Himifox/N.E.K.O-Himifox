@@ -2,12 +2,14 @@
 """Opt-in old/new prompt comparison using externally supplied real replies.
 
 Run with ``uv run python scripts/evaluate_emotion_reactions.py --samples replies.json
---model-config model.json --report report.json``. Samples are a nonempty JSON list
+--model-config model.json --report report.json --baseline-ref <pre-change-commit>``.
+Samples are a nonempty JSON list
 of {id, language, text}; languages are zh, zh-TW, en, ja, ko, ru, es, pt. Model
 config contains model, base_url, api_key_env and optional provider_type; the key
 itself stays in the named environment variable. No user ConfigManager is created.
 
-The baseline prompt and token budget come from --baseline-ref (default HEAD).
+The baseline prompt and token budget come from the required --baseline-ref.
+Identical prompts and token budgets are rejected before provider calls.
 Both variants use CURRENT production post-processing, isolating the prompt and
 budget change. Reports contain no sample identifiers, reply text or raw outputs.
 They measure agreement, not accuracy, and never declare a regression test passed.
@@ -26,6 +28,7 @@ import logging
 import math
 import os
 from pathlib import Path
+from queue import Empty, SimpleQueue
 import re
 import subprocess
 import sys
@@ -64,7 +67,7 @@ def _literal_assignment(source, name):
     raise ValueError(f"Missing literal baseline assignment: {name}")
 
 
-def load_baseline(ref="HEAD"):
+def load_baseline(ref):
     """Read Git blobs without executing baseline code or shell interpolation."""
     def git(*args):
         result = subprocess.run(
@@ -126,7 +129,13 @@ async def run_variant(emotion, sample, model_config, prompt, budget):
     from utils import file_utils
 
     observation = {"parse_status": "not_returned", "raw_emotion": None,
-                   "raw_confidence": None, "usage": {}, "truncated": None}
+                   "raw_confidence": None, "usage": {}, "truncated": None,
+                   "raw_emoji_status": "missing", "raw_emoji": None}
+    allowed_emojis = frozenset(
+        emoji for candidates in emotion.MESSAGE_REACTION_EMOJIS_BY_EMOTION.values()
+        for emoji in candidates
+    )
+    avatar_queue = SimpleQueue()
     real_factory = emotion.create_chat_llm_async
     real_parser = file_utils.robust_json_loads
     random_used = []
@@ -183,6 +192,13 @@ async def run_variant(emotion, sample, model_config, prompt, budget):
             raise
         observation["parse_status"] = "object" if isinstance(parsed, dict) else "non_object"
         if isinstance(parsed, dict):
+            emoji = parsed.get("emoji")
+            observation["raw_emoji_status"] = (
+                "missing" if "emoji" not in parsed else "null" if emoji is None
+                else "valid" if isinstance(emoji, str) and emoji in allowed_emojis else "invalid"
+            )
+            if observation["raw_emoji_status"] == "valid":
+                observation["raw_emoji"] = emoji
             label = parsed.get("emotion")
             if isinstance(label, str):
                 normalized = re.sub(r"[\s\-_]+", " ", label.strip().lower())
@@ -212,7 +228,7 @@ async def run_variant(emotion, sample, model_config, prompt, budget):
         replacements = {
             "get_config_manager": lambda: ReadOnlyConfig(),
             "_validate_local_mutation_request": lambda request: None,
-            "_push_emotion_update": lambda *args: None,
+            "get_sync_message_queue": lambda: {"evaluation": avatar_queue},
             "_resolve_emotion_prompt_language": lambda *args: sample["language"],
             "get_outward_emotion_analysis_prompt": lambda *args: prompt,
             "EMOTION_ANALYSIS_MAX_TOKENS": budget,
@@ -224,10 +240,25 @@ async def run_variant(emotion, sample, model_config, prompt, budget):
         stack.enter_context(patch.object(file_utils, "robust_json_loads", parse))
         result = await emotion.emotion_analysis(Request())
     reaction = result.get("reaction")
+    emoji = reaction.get("emoji") if isinstance(reaction, dict) else None
+    try:
+        update = avatar_queue.get_nowait().get("data", {})
+    except Empty:
+        update = None
+    avatar_update = ({"emotion": _safe_label(update.get("emotion")),
+                      "confidence": _safe_score(update.get("confidence"))}
+                     if isinstance(update, dict) else None)
+    expected_update = {"emotion": _safe_label(result.get("emotion")),
+                       "confidence": _safe_score(result.get("confidence"))}
     observation.update(
         final_emotion=_safe_label(result.get("emotion")),
         final_confidence=_safe_score(result.get("confidence")),
         reaction_source=("rule" if random_used else "model") if reaction else "none",
+        reaction_emoji=emoji if isinstance(emoji, str) and emoji in allowed_emojis else None,
+        reaction_present=bool(reaction),
+        avatar_update=avatar_update,
+        avatar_update_matches_result=(avatar_update is None if result.get("error")
+                                      else avatar_update == expected_update) and avatar_queue.empty(),
         error=bool(result.get("error")),
         latency_seconds=round(time.perf_counter() - start, 4),
     )
@@ -248,9 +279,17 @@ def build_report(samples, pairs, commit, old_budget, new_budget, threshold):
         (pair["old"]["final_confidence"] >= threshold)
         != (pair["new"]["final_confidence"] >= threshold) for pair in complete
     )
+    def reaction_present(variant):
+        return variant.get("reaction_present", variant["reaction_source"] != "none")
+
+    reaction_changes = sum(reaction_present(pair["old"]) != reaction_present(pair["new"])
+                           for pair in complete)
+    confidence_deltas = [pair["new"]["final_confidence"] - pair["old"]["final_confidence"]
+                         for pair in complete]
     failures = sum(variant["error"] or variant["parse_status"] != "object"
                    or variant["raw_emotion"] is None or variant["raw_confidence"] is None
                    or not 0 <= variant["raw_confidence"] <= 1
+                   or variant.get("avatar_update_matches_result") is False
                    for pair in pairs for variant in pair.values())
     missing = [lang for lang, count in coverage.items() if count == 0]
     summaries = {}
@@ -269,6 +308,8 @@ def build_report(samples, pairs, commit, old_budget, new_budget, threshold):
             "truncated_calls": sum(item["truncated"] is True for item in variants),
             "reaction_sources": {source: sum(item["reaction_source"] == source for item in variants)
                                  for source in ("model", "rule", "none")},
+            "avatar_update_mismatches": sum(item.get("avatar_update_matches_result") is False
+                                            for item in variants),
             "usage_available_calls": sum(bool(item["usage"]) for item in variants),
             "token_totals": {field: sum(item["usage"].get(field, 0) for item in variants)
                              for field in sorted({field for item in variants for field in item["usage"]})},
@@ -285,8 +326,19 @@ def build_report(samples, pairs, commit, old_budget, new_budget, threshold):
         "failed_calls": failures,
         "final_label_agreement": agreement / len(complete) if complete else None,
         "confidence_threshold_crossings": crossings,
+        "reaction_presence_changes": reaction_changes,
+        "final_confidence_delta": {
+            "pairs": len(confidence_deltas),
+            "mean": sum(confidence_deltas) / len(confidence_deltas) if confidence_deltas else None,
+            "mean_absolute": (sum(abs(delta) for delta in confidence_deltas) / len(confidence_deltas)
+                              if confidence_deltas else None),
+            "max_absolute": max(map(abs, confidence_deltas)) if confidence_deltas else None,
+        },
         "summaries": summaries,
-        "rows": [{"index": index, "language": sample["language"], **pair}
+        "rows": [{"index": index, "language": sample["language"], **pair,
+                  "confidence_delta": (pair["new"]["final_confidence"] - pair["old"]["final_confidence"]
+                                       if all(variant["final_confidence"] is not None
+                                              for variant in pair.values()) else None)}
                  for index, (sample, pair) in enumerate(zip(samples, pairs))],
     }
 
@@ -320,6 +372,14 @@ async def _evaluate(samples, model_config, baseline):
 
     commit, prompts, old_budget = baseline
     new_budget = emotion.EMOTION_ANALYSIS_MAX_TOKENS
+    new_prompts = {
+        sample["language"]: emotion.get_outward_emotion_analysis_prompt(sample["language"])
+        for sample in samples
+    }
+    if old_budget == new_budget and all(
+        prompts[language] == prompt for language, prompt in new_prompts.items()
+    ):
+        raise IdenticalBaselineError
     pairs = []
     with ExitStack() as stack:
         stack.enter_context(patch.object(llm_prompt_audit, "_ENABLED", False))
@@ -333,7 +393,7 @@ async def _evaluate(samples, model_config, baseline):
             order = ("old", "new") if index % 2 == 0 else ("new", "old")
             for variant in order:
                 prompt = (prompts[sample["language"]] if variant == "old"
-                          else emotion.get_outward_emotion_analysis_prompt(sample["language"]))
+                          else new_prompts[sample["language"]])
                 pair[variant] = await run_variant(
                     emotion, sample, model_config, prompt,
                     old_budget if variant == "old" else new_budget,
@@ -347,12 +407,17 @@ async def _evaluate(samples, model_config, baseline):
     return report
 
 
+class IdenticalBaselineError(ValueError):
+    """The selected samples would compare identical model inputs and budgets."""
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--samples", type=Path, required=True)
     parser.add_argument("--model-config", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--baseline-ref", default="HEAD")
+    parser.add_argument("--baseline-ref", required=True,
+                        help="Git ref containing the pre-change prompts and token budget")
     args = parser.parse_args(argv)
     previous_log_level = logging.root.manager.disable
     def loggers():
@@ -383,6 +448,11 @@ def main(argv=None):
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Report written; {report['failed_calls']} failed calls; review required.")
         return 1 if report["failed_calls"] or not report["coverage_sufficient"] else 0
+    except IdenticalBaselineError:
+        print("Evaluation rejected: baseline prompts and token budget match the current "
+              "version for all selected languages. Choose a pre-change --baseline-ref; "
+              "no provider calls made.", file=sys.stderr)
+        return 2
     except Exception as exc:
         print(f"Evaluation failed ({type(exc).__name__}); no passing result.", file=sys.stderr)
         return 2

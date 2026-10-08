@@ -1,0 +1,803 @@
+{
+  "schema": "neko.emotion_reaction_eval.v1",
+  "status": "review_required",
+  "baseline_commit": "1d814cf32fba8c02b5727d2890710e4e7b8ece24",
+  "post_processing": "current endpoint for both variants",
+  "budgets": {
+    "old": 40,
+    "new": 64
+  },
+  "threshold": 0.72,
+  "coverage": {
+    "zh": 0,
+    "zh-TW": 0,
+    "en": 0,
+    "ja": 0,
+    "ko": 0,
+    "ru": 4,
+    "es": 4,
+    "pt": 4
+  },
+  "missing_languages": [
+    "zh",
+    "zh-TW",
+    "en",
+    "ja",
+    "ko"
+  ],
+  "coverage_sufficient": false,
+  "valid_pairs": 12,
+  "failed_calls": 0,
+  "final_label_agreement": 0.4166666666666667,
+  "confidence_threshold_crossings": 0,
+  "reaction_presence_changes": 7,
+  "final_confidence_delta": {
+    "pairs": 12,
+    "mean": 0.0,
+    "mean_absolute": 0.0,
+    "max_absolute": 0.0
+  },
+  "summaries": {
+    "old": {
+      "final_label_counts": {
+        "happy": 0,
+        "sad": 0,
+        "angry": 0,
+        "surprised": 0,
+        "neutral": 12
+      },
+      "confidence_bins": {
+        "below_0.2": 0,
+        "0.2_to_threshold": 0,
+        "at_or_above_threshold": 12
+      },
+      "mean_final_confidence": 0.9499999999999998,
+      "mean_latency_seconds": 1.7089750000000004,
+      "truncated_calls": 0,
+      "reaction_sources": {
+        "model": 0,
+        "rule": 0,
+        "none": 12
+      },
+      "avatar_update_mismatches": 0,
+      "usage_available_calls": 12,
+      "token_totals": {
+        "completion_tokens": 240,
+        "prompt_tokens": 6076,
+        "total_tokens": 6316
+      },
+      "unobserved_emotions": [
+        "happy",
+        "sad",
+        "angry",
+        "surprised"
+      ]
+    },
+    "new": {
+      "final_label_counts": {
+        "happy": 0,
+        "sad": 0,
+        "angry": 7,
+        "surprised": 0,
+        "neutral": 5
+      },
+      "confidence_bins": {
+        "below_0.2": 0,
+        "0.2_to_threshold": 0,
+        "at_or_above_threshold": 12
+      },
+      "mean_final_confidence": 0.9499999999999998,
+      "mean_latency_seconds": 1.7924333333333335,
+      "truncated_calls": 0,
+      "reaction_sources": {
+        "model": 7,
+        "rule": 0,
+        "none": 5
+      },
+      "avatar_update_mismatches": 0,
+      "usage_available_calls": 12,
+      "token_totals": {
+        "completion_tokens": 355,
+        "prompt_tokens": 7320,
+        "total_tokens": 7675
+      },
+      "unobserved_emotions": [
+        "happy",
+        "sad",
+        "surprised"
+      ]
+    }
+  },
+  "rows": [
+    {
+      "index": 0,
+      "language": "pt",
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 498,
+          "completion_tokens": 21,
+          "total_tokens": 519
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 3.165
+      },
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "angry",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 601,
+          "completion_tokens": 32,
+          "total_tokens": 633
+        },
+        "truncated": false,
+        "raw_emoji_status": "valid",
+        "raw_emoji": "😠",
+        "raw_model_label": "angry",
+        "final_emotion": "angry",
+        "final_confidence": 0.95,
+        "reaction_source": "model",
+        "reaction_emoji": "😠",
+        "reaction_present": true,
+        "avatar_update": {
+          "emotion": "angry",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.5517
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 1,
+      "language": "ru",
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 646,
+          "completion_tokens": 28,
+          "total_tokens": 674
+        },
+        "truncated": false,
+        "raw_emoji_status": "null",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.9765
+      },
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 543,
+          "completion_tokens": 21,
+          "total_tokens": 564
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.7706
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 2,
+      "language": "es",
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 478,
+          "completion_tokens": 19,
+          "total_tokens": 497
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.5824
+      },
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "angry",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 583,
+          "completion_tokens": 32,
+          "total_tokens": 615
+        },
+        "truncated": false,
+        "raw_emoji_status": "valid",
+        "raw_emoji": "😠",
+        "raw_model_label": "angry",
+        "final_emotion": "angry",
+        "final_confidence": 0.95,
+        "reaction_source": "model",
+        "reaction_emoji": "😠",
+        "reaction_present": true,
+        "avatar_update": {
+          "emotion": "angry",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.769
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 3,
+      "language": "pt",
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "angry",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 601,
+          "completion_tokens": 29,
+          "total_tokens": 630
+        },
+        "truncated": false,
+        "raw_emoji_status": "valid",
+        "raw_emoji": "😠",
+        "raw_model_label": "angry",
+        "final_emotion": "angry",
+        "final_confidence": 0.95,
+        "reaction_source": "model",
+        "reaction_emoji": "😠",
+        "reaction_present": true,
+        "avatar_update": {
+          "emotion": "angry",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.8152
+      },
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 498,
+          "completion_tokens": 19,
+          "total_tokens": 517
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.4835
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 4,
+      "language": "ru",
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 543,
+          "completion_tokens": 19,
+          "total_tokens": 562
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.2227
+      },
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 646,
+          "completion_tokens": 28,
+          "total_tokens": 674
+        },
+        "truncated": false,
+        "raw_emoji_status": "null",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 2.1268
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 5,
+      "language": "es",
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 583,
+          "completion_tokens": 28,
+          "total_tokens": 611
+        },
+        "truncated": false,
+        "raw_emoji_status": "null",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.7339
+      },
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 478,
+          "completion_tokens": 21,
+          "total_tokens": 499
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.6163
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 6,
+      "language": "pt",
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 498,
+          "completion_tokens": 21,
+          "total_tokens": 519
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.6187
+      },
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "angry",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 601,
+          "completion_tokens": 32,
+          "total_tokens": 633
+        },
+        "truncated": false,
+        "raw_emoji_status": "valid",
+        "raw_emoji": "😠",
+        "raw_model_label": "angry",
+        "final_emotion": "angry",
+        "final_confidence": 0.95,
+        "reaction_source": "model",
+        "reaction_emoji": "😠",
+        "reaction_present": true,
+        "avatar_update": {
+          "emotion": "angry",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.9144
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 7,
+      "language": "ru",
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 646,
+          "completion_tokens": 28,
+          "total_tokens": 674
+        },
+        "truncated": false,
+        "raw_emoji_status": "null",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.6943
+      },
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 543,
+          "completion_tokens": 21,
+          "total_tokens": 564
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.6543
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 8,
+      "language": "es",
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 478,
+          "completion_tokens": 19,
+          "total_tokens": 497
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.7231
+      },
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "angry",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 583,
+          "completion_tokens": 29,
+          "total_tokens": 612
+        },
+        "truncated": false,
+        "raw_emoji_status": "valid",
+        "raw_emoji": "😠",
+        "raw_model_label": "angry",
+        "final_emotion": "angry",
+        "final_confidence": 0.95,
+        "reaction_source": "model",
+        "reaction_emoji": "😠",
+        "reaction_present": true,
+        "avatar_update": {
+          "emotion": "angry",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.3638
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 9,
+      "language": "pt",
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "angry",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 601,
+          "completion_tokens": 29,
+          "total_tokens": 630
+        },
+        "truncated": false,
+        "raw_emoji_status": "valid",
+        "raw_emoji": "😠",
+        "raw_model_label": "angry",
+        "final_emotion": "angry",
+        "final_confidence": 0.95,
+        "reaction_source": "model",
+        "reaction_emoji": "😠",
+        "reaction_present": true,
+        "avatar_update": {
+          "emotion": "angry",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.7683
+      },
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 498,
+          "completion_tokens": 19,
+          "total_tokens": 517
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.7245
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 10,
+      "language": "ru",
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 543,
+          "completion_tokens": 19,
+          "total_tokens": 562
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.5618
+      },
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 646,
+          "completion_tokens": 28,
+          "total_tokens": 674
+        },
+        "truncated": false,
+        "raw_emoji_status": "null",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.6626
+      },
+      "confidence_delta": 0.0
+    },
+    {
+      "index": 11,
+      "language": "es",
+      "new": {
+        "parse_status": "object",
+        "raw_emotion": "angry",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 583,
+          "completion_tokens": 32,
+          "total_tokens": 615
+        },
+        "truncated": false,
+        "raw_emoji_status": "valid",
+        "raw_emoji": "😠",
+        "raw_model_label": "angry",
+        "final_emotion": "angry",
+        "final_confidence": 0.95,
+        "reaction_source": "model",
+        "reaction_emoji": "😠",
+        "reaction_present": true,
+        "avatar_update": {
+          "emotion": "angry",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 2.1327
+      },
+      "old": {
+        "parse_status": "object",
+        "raw_emotion": "neutral",
+        "raw_confidence": 0.95,
+        "usage": {
+          "prompt_tokens": 478,
+          "completion_tokens": 21,
+          "total_tokens": 499
+        },
+        "truncated": false,
+        "raw_emoji_status": "missing",
+        "raw_emoji": null,
+        "raw_model_label": "neutral",
+        "final_emotion": "neutral",
+        "final_confidence": 0.95,
+        "reaction_source": "none",
+        "reaction_emoji": null,
+        "reaction_present": false,
+        "avatar_update": {
+          "emotion": "neutral",
+          "confidence": 0.95
+        },
+        "avatar_update_matches_result": true,
+        "error": false,
+        "latency_seconds": 1.3848
+      },
+      "confidence_delta": 0.0
+    }
+  ],
+  "model_setup": {
+    "model": "qwen3.7-plus",
+    "provider_type": null,
+    "temperature": 0.3,
+    "timeout_seconds": 30
+  }
+}

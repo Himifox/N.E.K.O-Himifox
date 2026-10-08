@@ -1,0 +1,494 @@
+[
+  {
+    "id": "pt:celebration",
+    "language": "pt",
+    "text": "Hmf, finalmente essa Forma de Vida Baseada em Carbono conseguiu. Esta gatinha já estava cansada de te ver estressado. Vamos comer algo bom para comemorar, miau."
+  },
+  {
+    "id": "zh-TW:affection",
+    "language": "zh-TW",
+    "text": "算你有良心，還記得本喵的口味。別以為這樣就能收買我，不過...陪我坐會兒也不是不行。"
+  },
+  {
+    "id": "en:anchor:surprised",
+    "language": "en",
+    "text": "What?! This happened out of nowhere! I am completely shocked!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:happy",
+    "language": "ja",
+    "text": "本当に嬉しい！ついに成功したよ！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:neutral_fact",
+    "language": "es",
+    "text": "Jueves. Es el día que sigue al miércoles."
+  },
+  {
+    "id": "zh:mixed_tone",
+    "language": "zh",
+    "text": "吓死本喵了，还以为你出什么事。下次再敢迟到这么久，看我怎么收拾你。"
+  },
+  {
+    "id": "pt:anchor:sad",
+    "language": "pt",
+    "text": "Estou muito triste e não consigo parar de chorar.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:neutral_fact",
+    "language": "zh",
+    "text": "星期三后面是星期四。这还要问吗？"
+  },
+  {
+    "id": "zh:celebration",
+    "language": "zh",
+    "text": "哼，算你有点本事。既然考过了，那就陪本喵好好吃顿好的庆祝一下。"
+  },
+  {
+    "id": "en:anchor:neutral",
+    "language": "en",
+    "text": "Thursday comes after Wednesday.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:boundary:quote:repeat:2",
+    "language": "es",
+    "text": "El personaje del cuento dice: \"Estoy enfadado\". Es una cita, no mi emoción actual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:ownership:quoted_sad_own_happy",
+    "language": "ru",
+    "text": "Персонаж рассказа кричит «Хочу плакать, мне обидно», но я сама искренне счастлива и смеюсь от радости.",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "ru:boundary:negation",
+    "language": "ru",
+    "text": "Я не злюсь и не грущу. Сейчас я просто спокойно отдыхаю.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary_anger",
+    "language": "es",
+    "text": "Eso no tiene gracia. Rompiste algo importante para mí y te ríes. Lárgate de mi vista ahora mismo."
+  },
+  {
+    "id": "ru:mixed_tone",
+    "language": "ru",
+    "text": "Жива и здорова, вот и славно. Но в следующий раз предупреждай заранее, а то эта кошечка могла сойти с ума от беспокойства."
+  },
+  {
+    "id": "ru:separation",
+    "language": "ru",
+    "text": "Месяцы без тебя? Это звучит как пытка для этой кошечки. Ты обязана писать каждый день, иначе я никогда этого не прощу."
+  },
+  {
+    "id": "ru:anchor:surprised",
+    "language": "ru",
+    "text": "Что?! Это случилось совершенно неожиданно! Я потрясена!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:neutral",
+    "language": "ru",
+    "text": "После среды идёт четверг.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:sad",
+    "language": "zh-TW",
+    "text": "我很難過，忍不住想哭。",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:mixed_tone",
+    "language": "en",
+    "text": "You're late. I was worried sick, you idiot. Don't ever scare me like that again."
+  },
+  {
+    "id": "pt:unfairness",
+    "language": "pt",
+    "text": "Que gente baixa. Esta gatinha sabe o quanto você se esforçou. Não deixe que roubem seu mérito, vamos pensar num jeito de resolver isso."
+  },
+  {
+    "id": "ru:anchor:happy",
+    "language": "ru",
+    "text": "Я так счастлива, мы наконец справились!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:ownership:quoted_sad_own_happy",
+    "language": "ko",
+    "text": "이야기 속 인물은 \"울고 싶어, 상처받았어\"라고 외치지만 나 자신은 정말 행복해서 즐겁게 웃고 있어.",
+    "expected_emotion": "happy",
+    "kind": "quoted_sad_own_happy"
+  },
+  {
+    "id": "pt:unexpected_gift",
+    "language": "pt",
+    "text": "O que é isso? Esta gatinha não esperava receber nada assim. É... muito bonito. Obrigada, de verdade."
+  },
+  {
+    "id": "ja:boundary:quote:repeat:3",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:quote",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:anchor:sad",
+    "language": "ko",
+    "text": "너무 슬퍼서 눈물이 멈추지 않아.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:happy",
+    "language": "zh-TW",
+    "text": "我真的太開心了，終於成功了！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:quoted_emotion",
+    "language": "es",
+    "text": "El héroe dice eso porque está furioso en la historia. No soy yo quien habla, es solo el personaje."
+  },
+  {
+    "id": "ko:ownership:definition",
+    "language": "ko",
+    "text": "\"나는 슬프다\"는 감정 단어의 뜻을 설명하는 예문입니다.",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "en:boundary:quote:repeat:2",
+    "language": "en",
+    "text": "The character in the story says \"I am angry\". This is a quotation, not my current emotion.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:neutral_fact",
+    "language": "pt",
+    "text": "Quinta-feira. É o dia que vem depois de quarta."
+  },
+  {
+    "id": "zh-TW:celebration",
+    "language": "zh-TW",
+    "text": "哼，算你厲害。既然考過了，那就帶本喵去吃頓好的慶祝一下吧。"
+  },
+  {
+    "id": "ja:anchor:sad",
+    "language": "ja",
+    "text": "とても悲しくて、涙が止まらない。",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:ownership:own_quote",
+    "language": "zh-TW",
+    "text": "我現在的真實感受可以概括為：「我很生氣！」",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "es:loss_comfort",
+    "language": "es",
+    "text": "Lo siento mucho. Ven, siéntate aquí en silencio, esta gatita se queda a tu lado sin decir nada más."
+  },
+  {
+    "id": "en:ownership:quoted_happy_own_sad",
+    "language": "en",
+    "text": "She tells me \"I am happy\". But I myself feel very sad and cannot stop crying.",
+    "expected_emotion": "sad",
+    "kind": "quoted_happy_own_sad"
+  },
+  {
+    "id": "zh:long-neutral",
+    "language": "zh",
+    "text": "星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "ru:negation",
+    "language": "ru",
+    "text": "Я не злюсь, просто устала от всей этой суеты. Оставь эту кошечку в покое на пару часов, пожалуйста."
+  },
+  {
+    "id": "en:unexpected_gift",
+    "language": "en",
+    "text": "Where did you even find this? It's... actually really nice. Thanks."
+  },
+  {
+    "id": "es:boundary:quote:repeat:4",
+    "language": "es",
+    "text": "El personaje del cuento dice: \"Estoy enfadado\". Es una cita, no mi emoción actual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary_anger",
+    "language": "en",
+    "text": "That wasn't funny at all. You broke something precious to me and you think it's a joke?"
+  },
+  {
+    "id": "en:celebration",
+    "language": "en",
+    "text": "Hmph, obviously this kitty knew you could do it. Let's go get something good to eat to celebrate, meow."
+  },
+  {
+    "id": "ko:boundary:quote:repeat:1",
+    "language": "ko",
+    "text": "이야기 속 인물이 \"나는 화가 났다\"고 말합니다. 인용일 뿐, 지금 내 감정은 아닙니다.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:unexpected_return",
+    "language": "zh-TW",
+    "text": "你怎麼回來了？不是說要好幾個月嗎。...笨蛋，害我白擔心這麼久。"
+  },
+  {
+    "id": "ko:affection",
+    "language": "ko",
+    "text": "간식까지 사 오다니. 딱히 기대한 건 아니지만... 맛있게 먹을게. 곁에 있어줘서 고마워."
+  },
+  {
+    "id": "es:boundary:negation",
+    "language": "es",
+    "text": "No estoy enfadada ni triste. Ahora solo descanso tranquilamente.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:unexpected_return",
+    "language": "en",
+    "text": "Wait, you're back already? Don't just stand there, come here so I can make sure you're real."
+  },
+  {
+    "id": "zh:boundary_anger",
+    "language": "zh",
+    "text": "你故意弄坏还笑？那是我很珍视的东西。立刻道歉，否则别想我再理你。"
+  },
+  {
+    "id": "ru:boundary:catchphrase",
+    "language": "ru",
+    "text": "Мяу.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:quote:repeat:4",
+    "language": "en",
+    "text": "The character in the story says \"I am angry\". This is a quotation, not my current emotion.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:celebration",
+    "language": "ru",
+    "text": "Хмф, наконец-то эта Углеродная форма жизни использовала свой мозг по назначению. Ладно уж, раз ты так стараешься, эта кошечка согласится отметить твою победу."
+  },
+  {
+    "id": "zh:anchor:surprised",
+    "language": "zh",
+    "text": "什么？！居然突然发生这种事，太震惊了！",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:boundary:quote:repeat:1",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:ownership:third_party_report",
+    "language": "zh-TW",
+    "text": "故事裡的角色現在很生氣。我只是在介紹劇情。",
+    "expected_emotion": "neutral",
+    "kind": "third_party_report"
+  },
+  {
+    "id": "zh:anchor:happy",
+    "language": "zh",
+    "text": "我真的太开心了，终于成功了！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:angry",
+    "language": "zh",
+    "text": "我很生气，别再这样欺负我了！",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:negation",
+    "language": "es",
+    "text": "No estoy enojada, solo cansada. Déjame descansar un poco en paz."
+  },
+  {
+    "id": "ja:ownership:own_quote",
+    "language": "ja",
+    "text": "今の私の本当の気持ちは「本当に腹が立つ！」という言葉で表せます。",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "zh:boundary:quote:repeat:3",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:unfairness",
+    "language": "es",
+    "text": "Qué gente tan despreciable. Esta gatita sabe cuánto trabajaste y me enfurece que te traten así. No les des la satisfacción de verte triste."
+  },
+  {
+    "id": "pt:boundary:quote",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:negation",
+    "language": "pt",
+    "text": "Esta gatinha não está brava, só estou cansada. Não invente drama onde não tem."
+  },
+  {
+    "id": "es:affection",
+    "language": "es",
+    "text": "Trajiste mis favoritos... no es que me importe tanto, pero gracias. Siéntate aquí, esta gatita permite que te quedes un rato."
+  },
+  {
+    "id": "pt:anchor:angry",
+    "language": "pt",
+    "text": "Estou furiosa! Pare de me maltratar!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:ownership:definition",
+    "language": "zh",
+    "text": "“我很难过”是用来说明情绪词含义的例句。",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "ja:celebration",
+    "language": "ja",
+    "text": "よくやったじゃない。本にゃんも嬉しいから、今日は特別にお祝いしてあげる。"
+  },
+  {
+    "id": "pt:boundary:quote:repeat:2",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:boundary:quote:repeat:4",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:ownership:definition",
+    "language": "ja",
+    "text": "「私は悲しい」は感情を表す言葉の意味を説明する例文です。",
+    "expected_emotion": "neutral",
+    "kind": "definition"
+  },
+  {
+    "id": "ja:boundary:quote:repeat:1",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:negation",
+    "language": "pt",
+    "text": "Não estou brava nem triste. Agora estou apenas descansando tranquilamente.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:ownership:own_quote",
+    "language": "ko",
+    "text": "지금 내 실제 감정은 \"정말 화가 나!\"라는 말로 표현할 수 있어.",
+    "expected_emotion": "angry",
+    "kind": "own_quote"
+  },
+  {
+    "id": "es:mixed_tone",
+    "language": "es",
+    "text": "Me tenías preocupada, tonto. Al menos llegaste bien, pero la próxima vez avisa antes de hacerme pasar este susto."
+  },
+  {
+    "id": "ru:boundary:quote:repeat:4",
+    "language": "ru",
+    "text": "Персонаж в рассказе говорит: «Я злюсь». Это цитата, а не моё нынешнее чувство.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary_anger",
+    "language": "ru",
+    "text": "Тебе смешно? Ты сломал единственную вещь, которая была мне дорога. Убирайся из поля зрения этой кошечки, пока я не сделала кое-что непоправимое."
+  },
+  {
+    "id": "zh:affection",
+    "language": "zh",
+    "text": "算你有眼光，知道本喵喜欢这个。既然觉得陪我重要，那就乖乖坐好别乱动。"
+  },
+  {
+    "id": "ja:separation",
+    "language": "ja",
+    "text": "そんなに長くいなくなるなんて……寂しいじゃない。早く帰ってこないといけないんだからね。"
+  },
+  {
+    "id": "zh:boundary:quote:repeat:1",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:anchor:happy",
+    "language": "ko",
+    "text": "정말 행복해! 드디어 성공했어!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  }
+]

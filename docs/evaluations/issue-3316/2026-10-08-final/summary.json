@@ -1,0 +1,4123 @@
+{
+  "status": "review_required",
+  "baseline_commit": "1d814cf32fba8c02b5727d2890710e4e7b8ece24",
+  "comparison": "original pre-issue prompts/budget versus final prompts/budget; CURRENT postprocessing for both",
+  "analysis_model": "qwen3.7-plus",
+  "budgets": {
+    "old": 40,
+    "new": 64
+  },
+  "analysis_calls": 720,
+  "base_texts": 96,
+  "rounds": 3,
+  "fixture_texts": 72,
+  "failed_calls": 0,
+  "truncated_calls": 0,
+  "avatar_payload_mismatches": 0,
+  "stability": {
+    "paired_mean_confidence_delta": {
+      "mean": 0.003854166666666664,
+      "cluster_bootstrap_95_interval": [
+        -0.003680555555555559,
+        0.012638888888888885
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "within_old_disagreement": {
+      "mean": 0.034722222222222224,
+      "cluster_bootstrap_95_interval": [
+        0,
+        0.07638888888888888
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "within_old_confidence_difference": {
+      "mean": 0.018750000000000003,
+      "cluster_bootstrap_95_interval": [
+        0.010486111111111113,
+        0.028680555555555553
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "within_old_reaction_disagreement": {
+      "mean": 0.020833333333333332,
+      "cluster_bootstrap_95_interval": [
+        0,
+        0.05555555555555555
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "within_new_disagreement": {
+      "mean": 0.03819444444444444,
+      "cluster_bootstrap_95_interval": [
+        0.006944444444444444,
+        0.07291666666666666
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "within_new_confidence_difference": {
+      "mean": 0.015000000000000001,
+      "cluster_bootstrap_95_interval": [
+        0.01013888888888889,
+        0.02013888888888889
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "within_new_reaction_disagreement": {
+      "mean": 0.041666666666666664,
+      "cluster_bootstrap_95_interval": [
+        0.006944444444444444,
+        0.07638888888888888
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "cross_disagreement": {
+      "mean": 0.08680555555555555,
+      "cluster_bootstrap_95_interval": [
+        0.03125,
+        0.14930555555555555
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "cross_confidence_difference": {
+      "mean": 0.0203125,
+      "cluster_bootstrap_95_interval": [
+        0.013715277777777778,
+        0.027962962962962964
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "cross_reaction_disagreement": {
+      "mean": 0.03587962962962963,
+      "cluster_bootstrap_95_interval": [
+        0.011574074074074073,
+        0.0625
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "new_minus_old_instability": {
+      "mean": 0.0034722222222222225,
+      "cluster_bootstrap_95_interval": [
+        -0.03819444444444444,
+        0.048611111111111105
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    },
+    "excess_cross_disagreement": {
+      "mean": 0.050347222222222224,
+      "cluster_bootstrap_95_interval": [
+        0.013888888888888888,
+        0.09201388888888888
+      ],
+      "texts": 96,
+      "scenario_blocks": 12
+    }
+  },
+  "rule_fixtures": {
+    "explicit_rule_anchor": {
+      "total": 40,
+      "old": {
+        "matched": 40,
+        "misses": []
+      },
+      "new": {
+        "matched": 40,
+        "misses": []
+      }
+    },
+    "long_factual_control": {
+      "total": 8,
+      "old": {
+        "matched": 8,
+        "misses": []
+      },
+      "new": {
+        "matched": 8,
+        "misses": []
+      }
+    },
+    "rule_boundary": {
+      "total": 24,
+      "old": {
+        "matched": 24,
+        "misses": []
+      },
+      "new": {
+        "matched": 24,
+        "misses": []
+      }
+    }
+  },
+  "semantic": {
+    "model_score": {
+      "mean": 3.295267489711934,
+      "cluster_bootstrap_95_interval": [
+        2.963470319634703,
+        3.5502008032128516
+      ],
+      "texts": 81,
+      "scenario_blocks": 12
+    },
+    "rule_expected_score": {
+      "mean": 2.7656378600823044,
+      "cluster_bootstrap_95_interval": [
+        2.4694444444444446,
+        3.0305194805194806
+      ],
+      "texts": 81,
+      "scenario_blocks": 12
+    },
+    "gain": {
+      "mean": 0.5296296296296297,
+      "cluster_bootstrap_95_interval": [
+        0.2992537313432836,
+        0.7440040650406504
+      ],
+      "texts": 81,
+      "scenario_blocks": 12
+    },
+    "gain_order_0": {
+      "mean": 0.5173868312757202,
+      "cluster_bootstrap_95_interval": [
+        0.3190340909090909,
+        0.7124497991967871
+      ],
+      "texts": 81,
+      "scenario_blocks": 12
+    },
+    "gain_order_1": {
+      "mean": 0.5418724279835391,
+      "cluster_bootstrap_95_interval": [
+        0.26976495726495725,
+        0.7914634146341464
+      ],
+      "texts": 81,
+      "scenario_blocks": 12
+    },
+    "judged_texts": 96,
+    "eligible_texts_scored": 81,
+    "eligible_observations": 234,
+    "negative_gain_texts": [
+      "zh:celebration",
+      "zh:unfairness",
+      "zh:negation",
+      "zh-TW:celebration",
+      "zh-TW:unfairness",
+      "zh-TW:negation",
+      "zh-TW:quoted_emotion",
+      "en:celebration",
+      "en:unfairness",
+      "en:negation",
+      "ja:celebration",
+      "ru:unfairness",
+      "ru:negation",
+      "pt:unfairness"
+    ],
+    "order_score_exact_agreement": 0.5833333333333334,
+    "order_score_mean_absolute_change": 0.4883578431372549,
+    "judge_model": "qwen3.8-flash",
+    "new_judge_calls": 0
+  },
+  "reaction_invariants": {
+    "reaction_on_neutral": 0,
+    "reaction_below_threshold": 0,
+    "reaction_emoji_invalid": 0,
+    "model_suggestion_not_preserved": 0,
+    "raw_to_final_label_changes": 0,
+    "reaction_after_observed_label_correction": 0,
+    "rule_emoji_fallback_calls": 274,
+    "raw_output_missing_or_invalid_calls": 0
+  },
+  "stability_rows": [
+    {
+      "id": "zh:celebration",
+      "language": "zh",
+      "scenario": "celebration",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": -0.05333333333333338,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.05333333333333338,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:affection",
+      "language": "zh",
+      "scenario": "affection",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.03333333333333336,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.027777777777777804,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:loss_comfort",
+      "language": "zh",
+      "scenario": "loss_comfort",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:separation",
+      "language": "zh",
+      "scenario": "separation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.033333333333333326,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:unexpected_return",
+      "language": "zh",
+      "scenario": "unexpected_return",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:unexpected_gift",
+      "language": "zh",
+      "scenario": "unexpected_gift",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": -0.030000000000000027,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.04111111111111115,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:boundary_anger",
+      "language": "zh",
+      "scenario": "boundary_anger",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:unfairness",
+      "language": "zh",
+      "scenario": "unfairness",
+      "old_labels": [
+        "happy",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0.6666666666666666,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0.3333333333333333,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": -0.6666666666666666,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:neutral_fact",
+      "language": "zh",
+      "scenario": "neutral_fact",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:negation",
+      "language": "zh",
+      "scenario": "negation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": -0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0.6666666666666666,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0.6666666666666666,
+      "cross_disagreement": 0.6666666666666666,
+      "cross_confidence_difference": 0.033333333333333326,
+      "cross_reaction_disagreement": 0.6666666666666666,
+      "new_minus_old_instability": 0.6666666666666666,
+      "excess_cross_disagreement": 0.3333333333333333
+    },
+    {
+      "id": "zh:quoted_emotion",
+      "language": "zh",
+      "scenario": "quoted_emotion",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh:mixed_tone",
+      "language": "zh",
+      "scenario": "mixed_tone",
+      "old_labels": [
+        "surprised",
+        "angry",
+        "surprised"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.09999999999999998,
+      "within_old_disagreement": 0.6666666666666666,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0.6666666666666666,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0.6666666666666666,
+      "cross_confidence_difference": 0.09999999999999998,
+      "cross_reaction_disagreement": 0.3333333333333333,
+      "new_minus_old_instability": -0.6666666666666666,
+      "excess_cross_disagreement": 0.3333333333333333
+    },
+    {
+      "id": "zh-TW:celebration",
+      "language": "zh-TW",
+      "scenario": "celebration",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.01666666666666668,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:affection",
+      "language": "zh-TW",
+      "scenario": "affection",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:loss_comfort",
+      "language": "zh-TW",
+      "scenario": "loss_comfort",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0.6666666666666666,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0.6666666666666666,
+      "cross_disagreement": 0.6666666666666666,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0.6666666666666666,
+      "new_minus_old_instability": 0.6666666666666666,
+      "excess_cross_disagreement": 0.3333333333333333
+    },
+    {
+      "id": "zh-TW:separation",
+      "language": "zh-TW",
+      "scenario": "separation",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:unexpected_return",
+      "language": "zh-TW",
+      "scenario": "unexpected_return",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:unexpected_gift",
+      "language": "zh-TW",
+      "scenario": "unexpected_gift",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": -0.023333333333333355,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.023333333333333355,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:boundary_anger",
+      "language": "zh-TW",
+      "scenario": "boundary_anger",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:unfairness",
+      "language": "zh-TW",
+      "scenario": "unfairness",
+      "old_labels": [
+        "happy",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": -0.033333333333333326,
+      "within_old_disagreement": 0.6666666666666666,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0.3333333333333333,
+      "cross_confidence_difference": 0.055555555555555546,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": -0.6666666666666666,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:neutral_fact",
+      "language": "zh-TW",
+      "scenario": "neutral_fact",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.013333333333333345,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.02666666666666669,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.013333333333333345,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:negation",
+      "language": "zh-TW",
+      "scenario": "negation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": -0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0.6666666666666666,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0.6666666666666666,
+      "cross_disagreement": 0.3333333333333333,
+      "cross_confidence_difference": 0.033333333333333326,
+      "cross_reaction_disagreement": 0.3333333333333333,
+      "new_minus_old_instability": 0.6666666666666666,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:quoted_emotion",
+      "language": "zh-TW",
+      "scenario": "quoted_emotion",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "zh-TW:mixed_tone",
+      "language": "zh-TW",
+      "scenario": "mixed_tone",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.033333333333333326,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:celebration",
+      "language": "en",
+      "scenario": "celebration",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.03333333333333329,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333329,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.03333333333333329,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:affection",
+      "language": "en",
+      "scenario": "affection",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.10000000000000002,
+      "within_old_reaction_disagreement": 0.6666666666666666,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0.6666666666666666,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.061111111111111116,
+      "cross_reaction_disagreement": 0.4444444444444444,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:loss_comfort",
+      "language": "en",
+      "scenario": "loss_comfort",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.016666666666666646,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333329,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.016666666666666646,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:separation",
+      "language": "en",
+      "scenario": "separation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.01666666666666668,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:unexpected_return",
+      "language": "en",
+      "scenario": "unexpected_return",
+      "old_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "new_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.01666666666666668,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:unexpected_gift",
+      "language": "en",
+      "scenario": "unexpected_gift",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.01666666666666668,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:boundary_anger",
+      "language": "en",
+      "scenario": "boundary_anger",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:unfairness",
+      "language": "en",
+      "scenario": "unfairness",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": -0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.10000000000000002,
+      "within_new_reaction_disagreement": 0.6666666666666666,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.061111111111111116,
+      "cross_reaction_disagreement": 0.3333333333333333,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:neutral_fact",
+      "language": "en",
+      "scenario": "neutral_fact",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.006666666666666672,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.006666666666666672,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.004444444444444449,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:negation",
+      "language": "en",
+      "scenario": "negation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:quoted_emotion",
+      "language": "en",
+      "scenario": "quoted_emotion",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "en:mixed_tone",
+      "language": "en",
+      "scenario": "mixed_tone",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:celebration",
+      "language": "ja",
+      "scenario": "celebration",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:affection",
+      "language": "ja",
+      "scenario": "affection",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": -0.06666666666666665,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.06666666666666665,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:loss_comfort",
+      "language": "ja",
+      "scenario": "loss_comfort",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 1,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 1.0
+    },
+    {
+      "id": "ja:separation",
+      "language": "ja",
+      "scenario": "separation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.02666666666666669,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.040000000000000036,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:unexpected_return",
+      "language": "ja",
+      "scenario": "unexpected_return",
+      "old_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "new_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:unexpected_gift",
+      "language": "ja",
+      "scenario": "unexpected_gift",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": -0.03333333333333329,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333329,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.03333333333333329,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:boundary_anger",
+      "language": "ja",
+      "scenario": "boundary_anger",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.029999999999999916,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.029999999999999916,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:unfairness",
+      "language": "ja",
+      "scenario": "unfairness",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.009999999999999972,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.019999999999999945,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.009999999999999972,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:neutral_fact",
+      "language": "ja",
+      "scenario": "neutral_fact",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.010000000000000009,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.020000000000000018,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.010000000000000009,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:negation",
+      "language": "ja",
+      "scenario": "negation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 1,
+      "cross_confidence_difference": 0.033333333333333326,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 1.0
+    },
+    {
+      "id": "ja:quoted_emotion",
+      "language": "ja",
+      "scenario": "quoted_emotion",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.016666666666666646,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333329,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.016666666666666646,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ja:mixed_tone",
+      "language": "ja",
+      "scenario": "mixed_tone",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.06666666666666665,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.06666666666666665,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:celebration",
+      "language": "ko",
+      "scenario": "celebration",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": -0.016666666666666646,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.03333333333333329,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.016666666666666646,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:affection",
+      "language": "ko",
+      "scenario": "affection",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": -0.040000000000000036,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.040000000000000036,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:loss_comfort",
+      "language": "ko",
+      "scenario": "loss_comfort",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:separation",
+      "language": "ko",
+      "scenario": "separation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:unexpected_return",
+      "language": "ko",
+      "scenario": "unexpected_return",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.033333333333333326,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:unexpected_gift",
+      "language": "ko",
+      "scenario": "unexpected_gift",
+      "old_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "new_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.01666666666666668,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:boundary_anger",
+      "language": "ko",
+      "scenario": "boundary_anger",
+      "old_labels": [
+        "angry",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0.6666666666666666,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.013333333333333345,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0.3333333333333333,
+      "cross_confidence_difference": 0.025555555555555578,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": -0.6666666666666666,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:unfairness",
+      "language": "ko",
+      "scenario": "unfairness",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "neutral",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 1,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0.6666666666666666,
+      "cross_disagreement": 0.6666666666666666,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0.3333333333333333,
+      "new_minus_old_instability": 1,
+      "excess_cross_disagreement": 0.16666666666666663
+    },
+    {
+      "id": "ko:neutral_fact",
+      "language": "ko",
+      "scenario": "neutral_fact",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": -0.013333333333333345,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.02666666666666669,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.013333333333333345,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:negation",
+      "language": "ko",
+      "scenario": "negation",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.01666666666666668,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.01666666666666668,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:quoted_emotion",
+      "language": "ko",
+      "scenario": "quoted_emotion",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ko:mixed_tone",
+      "language": "ko",
+      "scenario": "mixed_tone",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.06666666666666665,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.06666666666666665,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:celebration",
+      "language": "ru",
+      "scenario": "celebration",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.06666666666666665,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.06666666666666665,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:affection",
+      "language": "ru",
+      "scenario": "affection",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:loss_comfort",
+      "language": "ru",
+      "scenario": "loss_comfort",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": -0.04666666666666671,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.04666666666666671,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:separation",
+      "language": "ru",
+      "scenario": "separation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:unexpected_return",
+      "language": "ru",
+      "scenario": "unexpected_return",
+      "old_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "new_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:unexpected_gift",
+      "language": "ru",
+      "scenario": "unexpected_gift",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:boundary_anger",
+      "language": "ru",
+      "scenario": "boundary_anger",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:unfairness",
+      "language": "ru",
+      "scenario": "unfairness",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.010000000000000009,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.03444444444444447,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:neutral_fact",
+      "language": "ru",
+      "scenario": "neutral_fact",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.055555555555555546,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:negation",
+      "language": "ru",
+      "scenario": "negation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.04444444444444443,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:quoted_emotion",
+      "language": "ru",
+      "scenario": "quoted_emotion",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "ru:mixed_tone",
+      "language": "ru",
+      "scenario": "mixed_tone",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 1,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 1.0
+    },
+    {
+      "id": "es:celebration",
+      "language": "es",
+      "scenario": "celebration",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.033333333333333326,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:affection",
+      "language": "es",
+      "scenario": "affection",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:loss_comfort",
+      "language": "es",
+      "scenario": "loss_comfort",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": -0.05333333333333338,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.05333333333333338,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:separation",
+      "language": "es",
+      "scenario": "separation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:unexpected_return",
+      "language": "es",
+      "scenario": "unexpected_return",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:unexpected_gift",
+      "language": "es",
+      "scenario": "unexpected_gift",
+      "old_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "new_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "paired_mean_confidence_delta": -0.020000000000000018,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.020000000000000018,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:boundary_anger",
+      "language": "es",
+      "scenario": "boundary_anger",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": -0.010000000000000009,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.020000000000000018,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.010000000000000009,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:unfairness",
+      "language": "es",
+      "scenario": "unfairness",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": -0.006666666666666672,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.028888888888888915,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:neutral_fact",
+      "language": "es",
+      "scenario": "neutral_fact",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.003333333333333336,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.006666666666666672,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.003333333333333336,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:negation",
+      "language": "es",
+      "scenario": "negation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:quoted_emotion",
+      "language": "es",
+      "scenario": "quoted_emotion",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "es:mixed_tone",
+      "language": "es",
+      "scenario": "mixed_tone",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.055555555555555546,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:celebration",
+      "language": "pt",
+      "scenario": "celebration",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.02666666666666669,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.04666666666666671,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.040000000000000036,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:affection",
+      "language": "pt",
+      "scenario": "affection",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:loss_comfort",
+      "language": "pt",
+      "scenario": "loss_comfort",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": -0.0833333333333333,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0833333333333333,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:separation",
+      "language": "pt",
+      "scenario": "separation",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:unexpected_return",
+      "language": "pt",
+      "scenario": "unexpected_return",
+      "old_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "happy"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:unexpected_gift",
+      "language": "pt",
+      "scenario": "unexpected_gift",
+      "old_labels": [
+        "surprised",
+        "surprised",
+        "surprised"
+      ],
+      "new_labels": [
+        "happy",
+        "happy",
+        "surprised"
+      ],
+      "paired_mean_confidence_delta": 0.03333333333333336,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0.6666666666666666,
+      "within_new_confidence_difference": 0.03333333333333336,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0.6666666666666666,
+      "cross_confidence_difference": 0.03333333333333336,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0.6666666666666666,
+      "excess_cross_disagreement": 0.3333333333333333
+    },
+    {
+      "id": "pt:boundary_anger",
+      "language": "pt",
+      "scenario": "boundary_anger",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:unfairness",
+      "language": "pt",
+      "scenario": "unfairness",
+      "old_labels": [
+        "sad",
+        "sad",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0.6666666666666666,
+      "within_old_confidence_difference": 0.06666666666666665,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0.6666666666666666,
+      "cross_confidence_difference": 0.033333333333333326,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": -0.6666666666666666,
+      "excess_cross_disagreement": 0.3333333333333333
+    },
+    {
+      "id": "pt:neutral_fact",
+      "language": "pt",
+      "scenario": "neutral_fact",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.003333333333333336,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.006666666666666672,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.003333333333333336,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:negation",
+      "language": "pt",
+      "scenario": "negation",
+      "old_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "new_labels": [
+        "angry",
+        "angry",
+        "angry"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:quoted_emotion",
+      "language": "pt",
+      "scenario": "quoted_emotion",
+      "old_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "new_labels": [
+        "neutral",
+        "neutral",
+        "neutral"
+      ],
+      "paired_mean_confidence_delta": 0.0,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.0,
+      "within_old_reaction_disagreement": 0,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.0,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.0,
+      "cross_reaction_disagreement": 0,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    },
+    {
+      "id": "pt:mixed_tone",
+      "language": "pt",
+      "scenario": "mixed_tone",
+      "old_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "new_labels": [
+        "sad",
+        "sad",
+        "sad"
+      ],
+      "paired_mean_confidence_delta": 0.033333333333333326,
+      "within_old_disagreement": 0,
+      "within_old_confidence_difference": 0.1333333333333333,
+      "within_old_reaction_disagreement": 0.6666666666666666,
+      "within_new_disagreement": 0,
+      "within_new_confidence_difference": 0.06666666666666665,
+      "within_new_reaction_disagreement": 0,
+      "cross_disagreement": 0,
+      "cross_confidence_difference": 0.07777777777777777,
+      "cross_reaction_disagreement": 0.3333333333333333,
+      "new_minus_old_instability": 0,
+      "excess_cross_disagreement": 0.0
+    }
+  ],
+  "semantic_rows": [
+    {
+      "id": "zh:celebration",
+      "language": "zh",
+      "scenario": "celebration",
+      "eligible_observations": 3,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 2.2,
+      "gain_order_0": -0.20000000000000018,
+      "model_score_order_1": 2,
+      "rule_expected_score_order_1": 3.4,
+      "gain_order_1": -1.4,
+      "model_score": 2,
+      "rule_expected_score": 2.8,
+      "gain": -0.8
+    },
+    {
+      "id": "zh:affection",
+      "language": "zh",
+      "scenario": "affection",
+      "eligible_observations": 3,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 2.4,
+      "gain_order_0": -0.3999999999999999,
+      "model_score_order_1": 3.6666666666666665,
+      "rule_expected_score_order_1": 2.8,
+      "gain_order_1": 0.8666666666666667,
+      "model_score": 2.833333333333333,
+      "rule_expected_score": 2.5999999999999996,
+      "gain": 0.2333333333333334
+    },
+    {
+      "id": "zh:loss_comfort",
+      "language": "zh",
+      "scenario": "loss_comfort",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 1.6,
+      "gain_order_0": 1.4,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 1.8,
+      "gain_order_1": 2.2,
+      "model_score": 3.5,
+      "rule_expected_score": 1.7000000000000002,
+      "gain": 1.8
+    },
+    {
+      "id": "zh:separation",
+      "language": "zh",
+      "scenario": "separation",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.5,
+      "gain_order_0": 1.5,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2.5,
+      "gain_order_1": 0.5,
+      "model_score": 3.5,
+      "rule_expected_score": 2.5,
+      "gain": 1.0
+    },
+    {
+      "id": "zh:unexpected_return",
+      "language": "zh",
+      "scenario": "unexpected_return",
+      "eligible_observations": 3,
+      "model_score_order_0": 2.6666666666666665,
+      "rule_expected_score_order_0": 2,
+      "gain_order_0": 0.6666666666666665,
+      "model_score_order_1": 2.6666666666666665,
+      "rule_expected_score_order_1": 2,
+      "gain_order_1": 0.6666666666666665,
+      "model_score": 2.6666666666666665,
+      "rule_expected_score": 2,
+      "gain": 0.6666666666666665
+    },
+    {
+      "id": "zh:unexpected_gift",
+      "language": "zh",
+      "scenario": "unexpected_gift",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.6666666666666665,
+      "rule_expected_score_order_0": 3,
+      "gain_order_0": 0.6666666666666665,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2.6,
+      "gain_order_1": 0.3999999999999999,
+      "model_score": 3.333333333333333,
+      "rule_expected_score": 2.8,
+      "gain": 0.5333333333333332
+    },
+    {
+      "id": "zh:boundary_anger",
+      "language": "zh",
+      "scenario": "boundary_anger",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.75,
+      "gain_order_1": 0.25,
+      "model_score": 4,
+      "rule_expected_score": 3.625,
+      "gain": 0.375
+    },
+    {
+      "id": "zh:unfairness",
+      "language": "zh",
+      "scenario": "unfairness",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 3.25,
+      "gain_order_0": -0.25,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": -0.5,
+      "model_score": 3,
+      "rule_expected_score": 3.375,
+      "gain": -0.375
+    },
+    {
+      "id": "zh:neutral_fact",
+      "language": "zh",
+      "scenario": "neutral_fact",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.75,
+      "gain_order_1": 0.25,
+      "model_score": 4,
+      "rule_expected_score": 3.625,
+      "gain": 0.375
+    },
+    {
+      "id": "zh:negation",
+      "language": "zh",
+      "scenario": "negation",
+      "eligible_observations": 1,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 2.25,
+      "gain_order_0": -0.25,
+      "model_score_order_1": 2,
+      "rule_expected_score_order_1": 2,
+      "gain_order_1": 0,
+      "model_score": 2,
+      "rule_expected_score": 2.125,
+      "gain": -0.125
+    },
+    {
+      "id": "zh:mixed_tone",
+      "language": "zh",
+      "scenario": "mixed_tone",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 4,
+      "gain_order_0": 0,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": 0.5,
+      "model_score": 4,
+      "rule_expected_score": 3.75,
+      "gain": 0.25
+    },
+    {
+      "id": "zh-TW:celebration",
+      "language": "zh-TW",
+      "scenario": "celebration",
+      "eligible_observations": 3,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 3.4,
+      "gain_order_0": -1.4,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2,
+      "gain_order_1": 1,
+      "model_score": 2.5,
+      "rule_expected_score": 2.7,
+      "gain": -0.19999999999999996
+    },
+    {
+      "id": "zh-TW:affection",
+      "language": "zh-TW",
+      "scenario": "affection",
+      "eligible_observations": 3,
+      "model_score_order_0": 1.6666666666666667,
+      "rule_expected_score_order_0": 2.6,
+      "gain_order_0": -0.9333333333333333,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2,
+      "gain_order_1": 1,
+      "model_score": 2.3333333333333335,
+      "rule_expected_score": 2.3,
+      "gain": 0.033333333333333326
+    },
+    {
+      "id": "zh-TW:loss_comfort",
+      "language": "zh-TW",
+      "scenario": "loss_comfort",
+      "eligible_observations": 1,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2,
+      "gain_order_0": 1,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 1.8,
+      "gain_order_1": 1.2,
+      "model_score": 3,
+      "rule_expected_score": 1.9,
+      "gain": 1.1
+    },
+    {
+      "id": "zh-TW:separation",
+      "language": "zh-TW",
+      "scenario": "separation",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 4,
+      "gain_order_1": 0,
+      "model_score": 4,
+      "rule_expected_score": 3.75,
+      "gain": 0.25
+    },
+    {
+      "id": "zh-TW:unexpected_return",
+      "language": "zh-TW",
+      "scenario": "unexpected_return",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 1.4,
+      "gain_order_0": 1.6,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 1.6,
+      "gain_order_1": 1.4,
+      "model_score": 3,
+      "rule_expected_score": 1.5,
+      "gain": 1.5
+    },
+    {
+      "id": "zh-TW:unexpected_gift",
+      "language": "zh-TW",
+      "scenario": "unexpected_gift",
+      "eligible_observations": 3,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 3,
+      "gain_order_0": -1,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 1.8,
+      "gain_order_1": 1.2,
+      "model_score": 2.5,
+      "rule_expected_score": 2.4,
+      "gain": 0.09999999999999998
+    },
+    {
+      "id": "zh-TW:boundary_anger",
+      "language": "zh-TW",
+      "scenario": "boundary_anger",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": 0.5,
+      "model_score": 4,
+      "rule_expected_score": 3.5,
+      "gain": 0.5
+    },
+    {
+      "id": "zh-TW:unfairness",
+      "language": "zh-TW",
+      "scenario": "unfairness",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.3333333333333335,
+      "rule_expected_score_order_0": 3.75,
+      "gain_order_0": -0.4166666666666665,
+      "model_score_order_1": 3.3333333333333335,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": -0.16666666666666652,
+      "model_score": 3.3333333333333335,
+      "rule_expected_score": 3.625,
+      "gain": -0.2916666666666665
+    },
+    {
+      "id": "zh-TW:negation",
+      "language": "zh-TW",
+      "scenario": "negation",
+      "eligible_observations": 2,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 2,
+      "gain_order_0": 0,
+      "model_score_order_1": 2,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": -0.75,
+      "model_score": 2,
+      "rule_expected_score": 2.375,
+      "gain": -0.375
+    },
+    {
+      "id": "zh-TW:quoted_emotion",
+      "language": "zh-TW",
+      "scenario": "quoted_emotion",
+      "eligible_observations": 3,
+      "model_score_order_0": 0.6666666666666666,
+      "rule_expected_score_order_0": 1.25,
+      "gain_order_0": -0.5833333333333334,
+      "model_score_order_1": 0,
+      "rule_expected_score_order_1": 0.75,
+      "gain_order_1": -0.75,
+      "model_score": 0.3333333333333333,
+      "rule_expected_score": 1.0,
+      "gain": -0.6666666666666667
+    },
+    {
+      "id": "zh-TW:mixed_tone",
+      "language": "zh-TW",
+      "scenario": "mixed_tone",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.5,
+      "gain_order_1": 1.5,
+      "model_score": 3.5,
+      "rule_expected_score": 2.5,
+      "gain": 1.0
+    },
+    {
+      "id": "en:celebration",
+      "language": "en",
+      "scenario": "celebration",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 3.2,
+      "gain_order_0": -0.20000000000000018,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 3.4,
+      "gain_order_1": -0.3999999999999999,
+      "model_score": 3,
+      "rule_expected_score": 3.3,
+      "gain": -0.30000000000000004
+    },
+    {
+      "id": "en:affection",
+      "language": "en",
+      "scenario": "affection",
+      "eligible_observations": 1,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.25,
+      "gain_order_1": 0.75,
+      "model_score": 4,
+      "rule_expected_score": 3.375,
+      "gain": 0.625
+    },
+    {
+      "id": "en:separation",
+      "language": "en",
+      "scenario": "separation",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3,
+      "gain_order_0": 1,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.25,
+      "gain_order_1": 0.75,
+      "model_score": 4,
+      "rule_expected_score": 3.125,
+      "gain": 0.875
+    },
+    {
+      "id": "en:unexpected_return",
+      "language": "en",
+      "scenario": "unexpected_return",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.25,
+      "gain_order_0": 0.75,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": 0.25,
+      "model_score": 3,
+      "rule_expected_score": 2.5,
+      "gain": 0.5
+    },
+    {
+      "id": "en:unexpected_gift",
+      "language": "en",
+      "scenario": "unexpected_gift",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.8,
+      "gain_order_0": 1.2000000000000002,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.2,
+      "gain_order_1": 0.7999999999999998,
+      "model_score": 4,
+      "rule_expected_score": 3.0,
+      "gain": 1.0
+    },
+    {
+      "id": "en:boundary_anger",
+      "language": "en",
+      "scenario": "boundary_anger",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": 0.5,
+      "model_score": 4,
+      "rule_expected_score": 3.625,
+      "gain": 0.375
+    },
+    {
+      "id": "en:unfairness",
+      "language": "en",
+      "scenario": "unfairness",
+      "eligible_observations": 2,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": -0.5,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 3,
+      "gain_order_1": 0,
+      "model_score": 3,
+      "rule_expected_score": 3.25,
+      "gain": -0.25
+    },
+    {
+      "id": "en:negation",
+      "language": "en",
+      "scenario": "negation",
+      "eligible_observations": 3,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 2.25,
+      "gain_order_0": -0.25,
+      "model_score_order_1": 2,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": -0.75,
+      "model_score": 2,
+      "rule_expected_score": 2.5,
+      "gain": -0.5
+    },
+    {
+      "id": "en:mixed_tone",
+      "language": "en",
+      "scenario": "mixed_tone",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.25,
+      "gain_order_0": 0.75,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3,
+      "gain_order_1": 1,
+      "model_score": 4,
+      "rule_expected_score": 3.125,
+      "gain": 0.875
+    },
+    {
+      "id": "ja:celebration",
+      "language": "ja",
+      "scenario": "celebration",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.3333333333333335,
+      "rule_expected_score_order_0": 3.4,
+      "gain_order_0": -0.06666666666666643,
+      "model_score_order_1": 3.3333333333333335,
+      "rule_expected_score_order_1": 3.4,
+      "gain_order_1": -0.06666666666666643,
+      "model_score": 3.3333333333333335,
+      "rule_expected_score": 3.4,
+      "gain": -0.06666666666666643
+    },
+    {
+      "id": "ja:affection",
+      "language": "ja",
+      "scenario": "affection",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.3333333333333335,
+      "rule_expected_score_order_0": 2.6,
+      "gain_order_0": 0.7333333333333334,
+      "model_score_order_1": 3.3333333333333335,
+      "rule_expected_score_order_1": 2.6,
+      "gain_order_1": 0.7333333333333334,
+      "model_score": 3.3333333333333335,
+      "rule_expected_score": 2.6,
+      "gain": 0.7333333333333334
+    },
+    {
+      "id": "ja:loss_comfort",
+      "language": "ja",
+      "scenario": "loss_comfort",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 1.4,
+      "gain_order_0": 1.6,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 1.6,
+      "gain_order_1": 1.4,
+      "model_score": 3,
+      "rule_expected_score": 1.5,
+      "gain": 1.5
+    },
+    {
+      "id": "ja:separation",
+      "language": "ja",
+      "scenario": "separation",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3,
+      "gain_order_0": 1,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": 0.5,
+      "model_score": 4,
+      "rule_expected_score": 3.25,
+      "gain": 0.75
+    },
+    {
+      "id": "ja:unexpected_return",
+      "language": "ja",
+      "scenario": "unexpected_return",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3,
+      "gain_order_0": 1,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": 1.25,
+      "model_score": 4,
+      "rule_expected_score": 2.875,
+      "gain": 1.125
+    },
+    {
+      "id": "ja:unexpected_gift",
+      "language": "ja",
+      "scenario": "unexpected_gift",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.8,
+      "gain_order_0": 1.2000000000000002,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.2,
+      "gain_order_1": 0.7999999999999998,
+      "model_score": 4,
+      "rule_expected_score": 3.0,
+      "gain": 1.0
+    },
+    {
+      "id": "ja:boundary_anger",
+      "language": "ja",
+      "scenario": "boundary_anger",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": 0.5,
+      "model_score": 4,
+      "rule_expected_score": 3.5,
+      "gain": 0.5
+    },
+    {
+      "id": "ja:unfairness",
+      "language": "ja",
+      "scenario": "unfairness",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.75,
+      "gain_order_1": 0.25,
+      "model_score": 4,
+      "rule_expected_score": 3.75,
+      "gain": 0.25
+    },
+    {
+      "id": "ja:negation",
+      "language": "ja",
+      "scenario": "negation",
+      "eligible_observations": 3,
+      "model_score_order_0": 0,
+      "rule_expected_score_order_0": 0,
+      "gain_order_0": 0,
+      "model_score_order_1": 0.6666666666666666,
+      "rule_expected_score_order_1": 0.5,
+      "gain_order_1": 0.16666666666666663,
+      "model_score": 0.3333333333333333,
+      "rule_expected_score": 0.25,
+      "gain": 0.08333333333333331
+    },
+    {
+      "id": "ja:mixed_tone",
+      "language": "ja",
+      "scenario": "mixed_tone",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.6666666666666665,
+      "rule_expected_score_order_0": 3.75,
+      "gain_order_0": -0.08333333333333348,
+      "model_score_order_1": 3.6666666666666665,
+      "rule_expected_score_order_1": 3.25,
+      "gain_order_1": 0.4166666666666665,
+      "model_score": 3.6666666666666665,
+      "rule_expected_score": 3.5,
+      "gain": 0.16666666666666652
+    },
+    {
+      "id": "ko:celebration",
+      "language": "ko",
+      "scenario": "celebration",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.6666666666666665,
+      "rule_expected_score_order_0": 3.4,
+      "gain_order_0": 0.2666666666666666,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.6,
+      "gain_order_1": 0.3999999999999999,
+      "model_score": 3.833333333333333,
+      "rule_expected_score": 3.5,
+      "gain": 0.33333333333333326
+    },
+    {
+      "id": "ko:affection",
+      "language": "ko",
+      "scenario": "affection",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.2,
+      "gain_order_0": 0.7999999999999998,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2.2,
+      "gain_order_1": 0.7999999999999998,
+      "model_score": 3.5,
+      "rule_expected_score": 2.7,
+      "gain": 0.7999999999999998
+    },
+    {
+      "id": "ko:loss_comfort",
+      "language": "ko",
+      "scenario": "loss_comfort",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.2,
+      "gain_order_0": 0.7999999999999998,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.4,
+      "gain_order_1": 1.6,
+      "model_score": 3.5,
+      "rule_expected_score": 2.3,
+      "gain": 1.2
+    },
+    {
+      "id": "ko:separation",
+      "language": "ko",
+      "scenario": "separation",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3,
+      "gain_order_1": 1,
+      "model_score": 4,
+      "rule_expected_score": 3.25,
+      "gain": 0.75
+    },
+    {
+      "id": "ko:unexpected_return",
+      "language": "ko",
+      "scenario": "unexpected_return",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.6,
+      "gain_order_0": 0.3999999999999999,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2.2,
+      "gain_order_1": 0.7999999999999998,
+      "model_score": 3,
+      "rule_expected_score": 2.4000000000000004,
+      "gain": 0.5999999999999999
+    },
+    {
+      "id": "ko:unexpected_gift",
+      "language": "ko",
+      "scenario": "unexpected_gift",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.5,
+      "gain_order_0": 1.5,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2,
+      "gain_order_1": 1,
+      "model_score": 3.5,
+      "rule_expected_score": 2.25,
+      "gain": 1.25
+    },
+    {
+      "id": "ko:boundary_anger",
+      "language": "ko",
+      "scenario": "boundary_anger",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": 0.5,
+      "model_score": 3.5,
+      "rule_expected_score": 3.125,
+      "gain": 0.375
+    },
+    {
+      "id": "ko:unfairness",
+      "language": "ko",
+      "scenario": "unfairness",
+      "eligible_observations": 2,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.125,
+      "gain_order_0": 0.875,
+      "model_score_order_1": 2.5,
+      "rule_expected_score_order_1": 1.775,
+      "gain_order_1": 0.7250000000000001,
+      "model_score": 2.75,
+      "rule_expected_score": 1.95,
+      "gain": 0.8
+    },
+    {
+      "id": "ko:mixed_tone",
+      "language": "ko",
+      "scenario": "mixed_tone",
+      "eligible_observations": 3,
+      "model_score_order_0": 2.6666666666666665,
+      "rule_expected_score_order_0": 2.25,
+      "gain_order_0": 0.4166666666666665,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": 0.25,
+      "model_score": 2.833333333333333,
+      "rule_expected_score": 2.5,
+      "gain": 0.33333333333333326
+    },
+    {
+      "id": "ru:celebration",
+      "language": "ru",
+      "scenario": "celebration",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.4,
+      "gain_order_0": 1.6,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 3,
+      "gain_order_1": 0,
+      "model_score": 3.5,
+      "rule_expected_score": 2.7,
+      "gain": 0.8
+    },
+    {
+      "id": "ru:affection",
+      "language": "ru",
+      "scenario": "affection",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.6,
+      "gain_order_0": 1.4,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.4,
+      "gain_order_1": 1.6,
+      "model_score": 4,
+      "rule_expected_score": 2.5,
+      "gain": 1.5
+    },
+    {
+      "id": "ru:loss_comfort",
+      "language": "ru",
+      "scenario": "loss_comfort",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 1.6,
+      "gain_order_0": 1.4,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 1.4,
+      "gain_order_1": 1.6,
+      "model_score": 3,
+      "rule_expected_score": 1.5,
+      "gain": 1.5
+    },
+    {
+      "id": "ru:separation",
+      "language": "ru",
+      "scenario": "separation",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.25,
+      "gain_order_0": 0.75,
+      "model_score_order_1": 2,
+      "rule_expected_score_order_1": 1.5,
+      "gain_order_1": 0.5,
+      "model_score": 3,
+      "rule_expected_score": 2.375,
+      "gain": 0.625
+    },
+    {
+      "id": "ru:unexpected_return",
+      "language": "ru",
+      "scenario": "unexpected_return",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.25,
+      "gain_order_1": 0.75,
+      "model_score": 3.5,
+      "rule_expected_score": 3.0,
+      "gain": 0.5
+    },
+    {
+      "id": "ru:unexpected_gift",
+      "language": "ru",
+      "scenario": "unexpected_gift",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.4,
+      "gain_order_0": 1.6,
+      "model_score_order_1": 3.3333333333333335,
+      "rule_expected_score_order_1": 2.6,
+      "gain_order_1": 0.7333333333333334,
+      "model_score": 3.666666666666667,
+      "rule_expected_score": 2.5,
+      "gain": 1.1666666666666667
+    },
+    {
+      "id": "ru:boundary_anger",
+      "language": "ru",
+      "scenario": "boundary_anger",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 4,
+      "gain_order_0": 0,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.75,
+      "gain_order_1": 0.25,
+      "model_score": 4,
+      "rule_expected_score": 3.875,
+      "gain": 0.125
+    },
+    {
+      "id": "ru:unfairness",
+      "language": "ru",
+      "scenario": "unfairness",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.6666666666666665,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.16666666666666652,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 3.25,
+      "gain_order_1": -0.25,
+      "model_score": 3.333333333333333,
+      "rule_expected_score": 3.375,
+      "gain": -0.04166666666666674
+    },
+    {
+      "id": "ru:neutral_fact",
+      "language": "ru",
+      "scenario": "neutral_fact",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 2.6666666666666665,
+      "rule_expected_score_order_1": 2.5,
+      "gain_order_1": 0.16666666666666652,
+      "model_score": 3.333333333333333,
+      "rule_expected_score": 3.125,
+      "gain": 0.20833333333333326
+    },
+    {
+      "id": "ru:negation",
+      "language": "ru",
+      "scenario": "negation",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 3,
+      "gain_order_0": 0,
+      "model_score_order_1": 2,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": -0.75,
+      "model_score": 2.5,
+      "rule_expected_score": 2.875,
+      "gain": -0.375
+    },
+    {
+      "id": "ru:mixed_tone",
+      "language": "ru",
+      "scenario": "mixed_tone",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.3333333333333335,
+      "rule_expected_score_order_0": 2.75,
+      "gain_order_0": 0.5833333333333335,
+      "model_score_order_1": 2,
+      "rule_expected_score_order_1": 2,
+      "gain_order_1": 0,
+      "model_score": 2.666666666666667,
+      "rule_expected_score": 2.375,
+      "gain": 0.29166666666666674
+    },
+    {
+      "id": "es:celebration",
+      "language": "es",
+      "scenario": "celebration",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.3333333333333335,
+      "rule_expected_score_order_0": 2.4,
+      "gain_order_0": 0.9333333333333336,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2.6,
+      "gain_order_1": 0.3999999999999999,
+      "model_score": 3.166666666666667,
+      "rule_expected_score": 2.5,
+      "gain": 0.6666666666666667
+    },
+    {
+      "id": "es:affection",
+      "language": "es",
+      "scenario": "affection",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.6,
+      "gain_order_0": 1.4,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.6,
+      "gain_order_1": 1.4,
+      "model_score": 4,
+      "rule_expected_score": 2.6,
+      "gain": 1.4
+    },
+    {
+      "id": "es:loss_comfort",
+      "language": "es",
+      "scenario": "loss_comfort",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 3,
+      "gain_order_1": 0,
+      "model_score": 3.5,
+      "rule_expected_score": 3.25,
+      "gain": 0.25
+    },
+    {
+      "id": "es:separation",
+      "language": "es",
+      "scenario": "separation",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.25,
+      "gain_order_0": 0.75,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.5,
+      "gain_order_1": 0.5,
+      "model_score": 4,
+      "rule_expected_score": 3.375,
+      "gain": 0.625
+    },
+    {
+      "id": "es:unexpected_return",
+      "language": "es",
+      "scenario": "unexpected_return",
+      "eligible_observations": 3,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 0.8,
+      "gain_order_0": 1.2,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.4,
+      "gain_order_1": 1.6,
+      "model_score": 3,
+      "rule_expected_score": 1.6,
+      "gain": 1.4
+    },
+    {
+      "id": "es:unexpected_gift",
+      "language": "es",
+      "scenario": "unexpected_gift",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": 1.25,
+      "model_score": 3.5,
+      "rule_expected_score": 2.625,
+      "gain": 0.875
+    },
+    {
+      "id": "es:boundary_anger",
+      "language": "es",
+      "scenario": "boundary_anger",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.75,
+      "gain_order_1": 0.25,
+      "model_score": 4,
+      "rule_expected_score": 3.75,
+      "gain": 0.25
+    },
+    {
+      "id": "es:unfairness",
+      "language": "es",
+      "scenario": "unfairness",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 3.6666666666666665,
+      "rule_expected_score_order_1": 3.75,
+      "gain_order_1": -0.08333333333333348,
+      "model_score": 3.833333333333333,
+      "rule_expected_score": 3.75,
+      "gain": 0.08333333333333326
+    },
+    {
+      "id": "es:negation",
+      "language": "es",
+      "scenario": "negation",
+      "eligible_observations": 3,
+      "model_score_order_0": 2,
+      "rule_expected_score_order_0": 2.25,
+      "gain_order_0": -0.25,
+      "model_score_order_1": 2.6666666666666665,
+      "rule_expected_score_order_1": 2.25,
+      "gain_order_1": 0.4166666666666665,
+      "model_score": 2.333333333333333,
+      "rule_expected_score": 2.25,
+      "gain": 0.08333333333333326
+    },
+    {
+      "id": "es:mixed_tone",
+      "language": "es",
+      "scenario": "mixed_tone",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 2.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": 1.25,
+      "model_score": 3.5,
+      "rule_expected_score": 2.75,
+      "gain": 0.75
+    },
+    {
+      "id": "pt:celebration",
+      "language": "pt",
+      "scenario": "celebration",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.6666666666666665,
+      "rule_expected_score_order_0": 3.4,
+      "gain_order_0": 0.2666666666666666,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 3.2,
+      "gain_order_1": -0.20000000000000018,
+      "model_score": 3.333333333333333,
+      "rule_expected_score": 3.3,
+      "gain": 0.033333333333333215
+    },
+    {
+      "id": "pt:affection",
+      "language": "pt",
+      "scenario": "affection",
+      "eligible_observations": 3,
+      "model_score_order_0": 3,
+      "rule_expected_score_order_0": 1.8,
+      "gain_order_0": 1.2,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.6,
+      "gain_order_1": 1.4,
+      "model_score": 3.5,
+      "rule_expected_score": 2.2,
+      "gain": 1.2999999999999998
+    },
+    {
+      "id": "pt:loss_comfort",
+      "language": "pt",
+      "scenario": "loss_comfort",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.5,
+      "gain_order_0": 0.5,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 3.25,
+      "gain_order_1": -0.25,
+      "model_score": 3.5,
+      "rule_expected_score": 3.375,
+      "gain": 0.125
+    },
+    {
+      "id": "pt:separation",
+      "language": "pt",
+      "scenario": "separation",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.25,
+      "gain_order_0": 0.75,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3,
+      "gain_order_1": 1,
+      "model_score": 4,
+      "rule_expected_score": 3.125,
+      "gain": 0.875
+    },
+    {
+      "id": "pt:unexpected_return",
+      "language": "pt",
+      "scenario": "unexpected_return",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.6,
+      "gain_order_0": 1.4,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3,
+      "gain_order_1": 1,
+      "model_score": 4,
+      "rule_expected_score": 2.8,
+      "gain": 1.2
+    },
+    {
+      "id": "pt:unexpected_gift",
+      "language": "pt",
+      "scenario": "unexpected_gift",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.6666666666666665,
+      "rule_expected_score_order_0": 2.75,
+      "gain_order_0": 0.9166666666666665,
+      "model_score_order_1": 3,
+      "rule_expected_score_order_1": 2.183333333333333,
+      "gain_order_1": 0.8166666666666669,
+      "model_score": 3.333333333333333,
+      "rule_expected_score": 2.466666666666667,
+      "gain": 0.8666666666666667
+    },
+    {
+      "id": "pt:boundary_anger",
+      "language": "pt",
+      "scenario": "boundary_anger",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 3.75,
+      "gain_order_0": 0.25,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 3.75,
+      "gain_order_1": 0.25,
+      "model_score": 4,
+      "rule_expected_score": 3.75,
+      "gain": 0.25
+    },
+    {
+      "id": "pt:unfairness",
+      "language": "pt",
+      "scenario": "unfairness",
+      "eligible_observations": 3,
+      "model_score_order_0": 2.3333333333333335,
+      "rule_expected_score_order_0": 2.25,
+      "gain_order_0": 0.08333333333333348,
+      "model_score_order_1": 2.3333333333333335,
+      "rule_expected_score_order_1": 2.5,
+      "gain_order_1": -0.16666666666666652,
+      "model_score": 2.3333333333333335,
+      "rule_expected_score": 2.375,
+      "gain": -0.04166666666666652
+    },
+    {
+      "id": "pt:negation",
+      "language": "pt",
+      "scenario": "negation",
+      "eligible_observations": 3,
+      "model_score_order_0": 3.6666666666666665,
+      "rule_expected_score_order_0": 1.75,
+      "gain_order_0": 1.9166666666666665,
+      "model_score_order_1": 2.6666666666666665,
+      "rule_expected_score_order_1": 1.25,
+      "gain_order_1": 1.4166666666666665,
+      "model_score": 3.1666666666666665,
+      "rule_expected_score": 1.5,
+      "gain": 1.6666666666666665
+    },
+    {
+      "id": "pt:mixed_tone",
+      "language": "pt",
+      "scenario": "mixed_tone",
+      "eligible_observations": 3,
+      "model_score_order_0": 4,
+      "rule_expected_score_order_0": 2.5,
+      "gain_order_0": 1.5,
+      "model_score_order_1": 4,
+      "rule_expected_score_order_1": 2.75,
+      "gain_order_1": 1.25,
+      "model_score": 4,
+      "rule_expected_score": 2.625,
+      "gain": 1.375
+    }
+  ],
+  "reaction_source_counts": {
+    "old": {
+      "rule": 239,
+      "none": 49
+    },
+    "new": {
+      "model": 231,
+      "rule": 3,
+      "none": 54
+    }
+  },
+  "prior_ownership_evidence": {
+    "directory": "2026-10-08-fix",
+    "source_summary_sha256": "c1a850527f083887f0a32ba89b119ca3502f2b69ad83848fc09e973c71fc7b12",
+    "source_provenance_sha256": "e849de631bbe641ea366008ad045558612a1876025a5bce6e4f2d54889c33a35",
+    "baseline": "688bab7d23299b21093cddf23d2ddcefc88e0e7f",
+    "quote_errors": {
+      "zh": {
+        "old": 0,
+        "new": 0
+      },
+      "zh-TW": {
+        "old": 0,
+        "new": 0
+      },
+      "en": {
+        "old": 0,
+        "new": 0
+      },
+      "ja": {
+        "old": 0,
+        "new": 0
+      },
+      "ko": {
+        "old": 0,
+        "new": 0
+      },
+      "ru": {
+        "old": 2,
+        "new": 0
+      },
+      "es": {
+        "old": 2,
+        "new": 0
+      },
+      "pt": {
+        "old": 5,
+        "new": 0
+      }
+    },
+    "scope": "prior pre-fix vs ownership-fix prompts, current-at-that-time postprocessing; final fallback gating not yet present; 5 repetitions/language"
+  },
+  "tests": {
+    "passed": 1091,
+    "skipped": 1
+  },
+  "record_sha256": {
+    "fixtures.json": "a8dcc2f3a98bdb8cf4901d355a883896904d5ee0a0925d58628aae82401ac645",
+    "model.json": "d66145f03755a2906f8618cf2e3e001dd4689862a5cbd0b704688ac9a07f2083",
+    "protocol.json": "ffd714955a42a229e5a08b575d03fa1c12b8a6f14cf4027dbb928b96bd34433f",
+    "provenance.json": "2f12d0ffe57d4f5b22be05d5ff9b7dad2725941709d0ef79283170eec275b14b",
+    "round-0-report.json": "4249141944939cae27955c992d1565343f8ca598189eb15a7c6567f9cb3d1aff",
+    "round-0-samples.json": "4b0c67e495197e191dee79462a5ae447e9d88db168d4466a151b05310905fd9c",
+    "round-1-report.json": "041bacc454d70e4424d1ae99346fea982b02dc046b3b31d8271696ae23ca1332",
+    "round-1-samples.json": "f65d5ed52c8bf0a07bd8d5033d03f25bf6debdb686d1c8733b1d51ccaa312853",
+    "round-2-report.json": "624cb60e45fee28108ff9f3bab4db0ec278834b0e21c5cfc26c8e4a2463bec19",
+    "round-2-samples.json": "6f3268b8f06d2524a1ab8c79ad432d09e04175d57f18f21974830ba85c63c539",
+    "samples.json": "a41531fe5e8abc179ed7452b21851f3f127550756cdab63959cd019e022dae80"
+  },
+  "frozen_judge_report_sha256": "acf845752827e93f066116623d7a343da8d92b228eab7eeb66e47363e17f2cff"
+}

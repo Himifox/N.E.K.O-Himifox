@@ -1,0 +1,16 @@
+{
+  "fixtures.json": "d7f5c66c3a624effde2295cf803d4f4c9948da0653dbdd7f375977874c31a001",
+  "model.json": "d66145f03755a2906f8618cf2e3e001dd4689862a5cbd0b704688ac9a07f2083",
+  "ownership-fix-comparison.png": "80519cd21198acc2689d0585a1ee5b845df827d19e59a59c4aa8e2c54809d3ca",
+  "ownership-fix-comparison.svg": "a2ae2f5221a104dc41d0b8630bd8f958e65b581b32d84a86b0bf20592b242317",
+  "part-0-report.json": "bc30407ea91767b1d97e142ce372a730af20d934fdfb4d7bb895e34cc01ac5f6",
+  "part-0-samples.json": "29b1f37f519675cf2ff0b7f7e71b69f817cd8b01ba4f4346d1f5214a081abcdc",
+  "part-1-report.json": "670a1c3e77604cc83e9baeec887705dc4dd5bc850a10de5f56d73c9181ecbba5",
+  "part-1-samples.json": "a5eeaf75f7f97ec060bc52302b89169b0d413cc89c7353b56490987d500cd167",
+  "part-2-report.json": "34410de7cf1f98ff9d4c53d428806cf610be49bdcc546a60f2f1921f9ec82d66",
+  "part-2-samples.json": "4de9f8861ef4f9fce3f8c901620acb99af2ce62bd381a6f7c41b6a6ae20bf4b3",
+  "protocol.json": "28e816acfbd5d653a234613f9b68618b073840084262385b21d1e3d2edbb18d9",
+  "provenance.json": "e849de631bbe641ea366008ad045558612a1876025a5bce6e4f2d54889c33a35",
+  "README.md": "6c9297defb85e02b672a7ac2896d4a54cc1cc94fae290914648973c3fb8477fb",
+  "summary.json": "c1a850527f083887f0a32ba89b119ca3502f2b69ad83848fc09e973c71fc7b12"
+}

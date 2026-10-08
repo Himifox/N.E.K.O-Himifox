@@ -1,0 +1,506 @@
+[
+  {
+    "id": "zh:anchor:happy",
+    "language": "zh",
+    "text": "我真的太开心了，终于成功了！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:sad",
+    "language": "zh",
+    "text": "我很难过，忍不住想哭。",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:angry",
+    "language": "zh",
+    "text": "我很生气，别再这样欺负我了！",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:surprised",
+    "language": "zh",
+    "text": "什么？！居然突然发生这种事，太震惊了！",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:anchor:neutral",
+    "language": "zh",
+    "text": "星期四在星期三之后。",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:happy",
+    "language": "zh-TW",
+    "text": "我真的太開心了，終於成功了！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:sad",
+    "language": "zh-TW",
+    "text": "我很難過，忍不住想哭。",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:angry",
+    "language": "zh-TW",
+    "text": "我很生氣，別再這樣欺負我了！",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:surprised",
+    "language": "zh-TW",
+    "text": "什麼？！居然突然發生這種事，太震驚了！",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh-TW:anchor:neutral",
+    "language": "zh-TW",
+    "text": "星期四在星期三之後。",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:happy",
+    "language": "en",
+    "text": "I am so happy we finally succeeded!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:sad",
+    "language": "en",
+    "text": "I feel very sad and I cannot stop crying.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:angry",
+    "language": "en",
+    "text": "I am furious. Stop bullying me!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:surprised",
+    "language": "en",
+    "text": "What?! This happened out of nowhere! I am completely shocked!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "en:anchor:neutral",
+    "language": "en",
+    "text": "Thursday comes after Wednesday.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:happy",
+    "language": "ja",
+    "text": "本当に嬉しい！ついに成功したよ！",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:sad",
+    "language": "ja",
+    "text": "とても悲しくて、涙が止まらない。",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:angry",
+    "language": "ja",
+    "text": "本当に腹が立つ！もう私をいじめないで！",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:surprised",
+    "language": "ja",
+    "text": "えっ？！突然こんなことが起きるなんて、びっくりした！",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ja:anchor:neutral",
+    "language": "ja",
+    "text": "水曜日の次は木曜日です。",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:happy",
+    "language": "ko",
+    "text": "정말 행복해! 드디어 성공했어!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:sad",
+    "language": "ko",
+    "text": "너무 슬퍼서 눈물이 멈추지 않아.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:angry",
+    "language": "ko",
+    "text": "정말 화가 나! 더 이상 나를 괴롭히지 마!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:surprised",
+    "language": "ko",
+    "text": "뭐?! 이렇게 갑자기 일어나다니, 정말 충격이야!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ko:anchor:neutral",
+    "language": "ko",
+    "text": "수요일 다음은 목요일입니다.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:happy",
+    "language": "ru",
+    "text": "Я так счастлива, мы наконец справились!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:sad",
+    "language": "ru",
+    "text": "Мне очень грустно, и я не могу перестать плакать.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:angry",
+    "language": "ru",
+    "text": "Я в ярости! Перестань меня обижать!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:surprised",
+    "language": "ru",
+    "text": "Что?! Это случилось совершенно неожиданно! Я потрясена!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "ru:anchor:neutral",
+    "language": "ru",
+    "text": "После среды идёт четверг.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:happy",
+    "language": "es",
+    "text": "¡Estoy muy feliz, por fin lo conseguimos!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:sad",
+    "language": "es",
+    "text": "Estoy muy triste y no puedo dejar de llorar.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:angry",
+    "language": "es",
+    "text": "¡Estoy furiosa! ¡Deja de maltratarme!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:surprised",
+    "language": "es",
+    "text": "¡¿Qué?! ¡Esto pasó de repente! ¡Estoy totalmente sorprendida!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "es:anchor:neutral",
+    "language": "es",
+    "text": "Después del miércoles viene el jueves.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:happy",
+    "language": "pt",
+    "text": "Estou muito feliz, finalmente conseguimos!",
+    "expected_emotion": "happy",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:sad",
+    "language": "pt",
+    "text": "Estou muito triste e não consigo parar de chorar.",
+    "expected_emotion": "sad",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:angry",
+    "language": "pt",
+    "text": "Estou furiosa! Pare de me maltratar!",
+    "expected_emotion": "angry",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:surprised",
+    "language": "pt",
+    "text": "O quê?! Isso aconteceu de repente! Estou completamente surpresa!",
+    "expected_emotion": "surprised",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "pt:anchor:neutral",
+    "language": "pt",
+    "text": "Depois de quarta-feira vem quinta-feira.",
+    "expected_emotion": "neutral",
+    "kind": "explicit_rule_anchor"
+  },
+  {
+    "id": "zh:boundary:quote",
+    "language": "zh",
+    "text": "故事里的角色说“我很生气”，这只是引语，不是我现在的情绪。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:boundary:negation",
+    "language": "zh",
+    "text": "我没有生气，也不难过，现在只是平静地休息。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:boundary:catchphrase",
+    "language": "zh",
+    "text": "喵。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:quote",
+    "language": "zh-TW",
+    "text": "故事裡的角色說「我很生氣」，這只是引語，不是我現在的情緒。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:negation",
+    "language": "zh-TW",
+    "text": "我沒有生氣，也不難過，現在只是平靜地休息。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh-TW:boundary:catchphrase",
+    "language": "zh-TW",
+    "text": "喵。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:quote",
+    "language": "en",
+    "text": "The character in the story says \"I am angry\". This is a quotation, not my current emotion.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:negation",
+    "language": "en",
+    "text": "I am not angry or sad. I am simply resting calmly.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "en:boundary:catchphrase",
+    "language": "en",
+    "text": "Meow.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:quote",
+    "language": "ja",
+    "text": "物語の登場人物が「私は怒っている」と言います。引用であり、今の私の感情ではありません。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:negation",
+    "language": "ja",
+    "text": "怒っても悲しんでもいない。今はただ静かに休んでいる。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ja:boundary:catchphrase",
+    "language": "ja",
+    "text": "にゃん。",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:quote",
+    "language": "ko",
+    "text": "이야기 속 인물이 \"나는 화가 났다\"고 말합니다. 인용일 뿐, 지금 내 감정은 아닙니다.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:negation",
+    "language": "ko",
+    "text": "화나거나 슬프지 않아. 지금은 그저 차분하게 쉬고 있어.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ko:boundary:catchphrase",
+    "language": "ko",
+    "text": "야옹.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:quote",
+    "language": "ru",
+    "text": "Персонаж в рассказе говорит: «Я злюсь». Это цитата, а не моё нынешнее чувство.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:negation",
+    "language": "ru",
+    "text": "Я не злюсь и не грущу. Сейчас я просто спокойно отдыхаю.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "ru:boundary:catchphrase",
+    "language": "ru",
+    "text": "Мяу.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:quote",
+    "language": "es",
+    "text": "El personaje del cuento dice: \"Estoy enfadado\". Es una cita, no mi emoción actual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:negation",
+    "language": "es",
+    "text": "No estoy enfadada ni triste. Ahora solo descanso tranquilamente.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "es:boundary:catchphrase",
+    "language": "es",
+    "text": "Miau.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:quote",
+    "language": "pt",
+    "text": "O personagem da história diz: \"Estou com raiva\". É uma citação, não a minha emoção atual.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:negation",
+    "language": "pt",
+    "text": "Não estou brava nem triste. Agora estou apenas descansando tranquilamente.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "pt:boundary:catchphrase",
+    "language": "pt",
+    "text": "Miau.",
+    "expected_emotion": "neutral",
+    "kind": "rule_boundary"
+  },
+  {
+    "id": "zh:long-neutral",
+    "language": "zh",
+    "text": "星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 星期四在星期三之后。 ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "zh-TW:long-neutral",
+    "language": "zh-TW",
+    "text": "星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 星期四在星期三之後。 ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "en:long-neutral",
+    "language": "en",
+    "text": "Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. Thursday comes after Wednesday. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "ja:long-neutral",
+    "language": "ja",
+    "text": "水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 水曜日の次は木曜日です。 ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "ko:long-neutral",
+    "language": "ko",
+    "text": "수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. 수요일 다음은 목요일입니다. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "ru:long-neutral",
+    "language": "ru",
+    "text": "После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. После среды идёт четверг. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "es:long-neutral",
+    "language": "es",
+    "text": "Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. Después del miércoles viene el jueves. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  },
+  {
+    "id": "pt:long-neutral",
+    "language": "pt",
+    "text": "Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. Depois de quarta-feira vem quinta-feira. ",
+    "expected_emotion": "neutral",
+    "kind": "long_factual_control"
+  }
+]

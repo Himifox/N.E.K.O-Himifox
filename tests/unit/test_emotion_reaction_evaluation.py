@@ -63,6 +63,62 @@ def test_real_baseline_and_runtime_have_the_same_eight_languages():
     assert set(evaluation.LANGUAGES) == set(prompts) == set(OUTWARD_EMOTION_ANALYSIS_PROMPT)
 
 
+@pytest.mark.parametrize("changed_language,budget_delta,rejected", [
+    (None, 0, True), ("zh", 0, True), ("en", 0, False), (None, -24, False),
+])
+def test_identical_selected_inputs_are_rejected_before_model_calls(
+    monkeypatch, changed_language, budget_delta, rejected,
+):
+    emotion = importlib.import_module("main_routers.system_router.emotion")
+    prompts = {lang: emotion.get_outward_emotion_analysis_prompt(lang)
+               for lang in evaluation.LANGUAGES}
+    if changed_language:
+        prompts[changed_language] += " old rule"
+    baseline = ("a" * 40, prompts, emotion.EMOTION_ANALYSIS_MAX_TOKENS + budget_delta)
+    samples = [{"id": "x", "language": "en", "text": "offline reply"}]
+    calls = []
+
+    async def run_variant(*args):
+        calls.append(args)
+        return _observation()
+
+    monkeypatch.setattr(evaluation, "run_variant", run_variant)
+    if rejected:
+        with pytest.raises(evaluation.IdenticalBaselineError):
+            asyncio.run(evaluation.evaluate(samples, {"model": "offline"}, baseline))
+        assert not calls
+    else:
+        report = asyncio.run(evaluation.evaluate(samples, {"model": "offline"}, baseline))
+        assert len(calls) == 2 and report["valid_pairs"] == 1
+
+
+def test_cli_requires_explicit_baseline_before_reading_inputs(monkeypatch, capsys):
+    def unexpected(*args):
+        pytest.fail("Inputs must not be read without an explicit baseline")
+
+    monkeypatch.setattr(evaluation, "load_samples", unexpected)
+    with pytest.raises(SystemExit) as exc:
+        evaluation.main(["--samples", "x", "--model-config", "y", "--report", "z"])
+    assert exc.value.code == 2 and "--baseline-ref" in capsys.readouterr().err
+
+
+def test_cli_explains_identical_baseline_without_overwriting_report(tmp_path, monkeypatch, capsys):
+    report = tmp_path / "report.json"
+    report.write_text("previous report", encoding="utf-8")
+    monkeypatch.setattr(evaluation, "load_samples", lambda path: [])
+    monkeypatch.setattr(evaluation, "load_model_config", lambda path: {})
+    monkeypatch.setattr(evaluation, "load_baseline", lambda ref: None)
+
+    async def reject(*args):
+        raise evaluation.IdenticalBaselineError
+
+    monkeypatch.setattr(evaluation, "evaluate", reject)
+    code = evaluation.main(["--samples", "x", "--model-config", "y", "--report", str(report),
+                            "--baseline-ref", "HEAD"])
+    assert code == 2 and "no provider calls made" in capsys.readouterr().err
+    assert report.read_text(encoding="utf-8") == "previous report"
+
+
 @pytest.mark.parametrize("value", [None, True, "bad", float("nan"), float("inf"), -0.1, 1.1])
 def test_invalid_confidence_cannot_count_as_a_success(value):
     assert evaluation._safe_score(value) is None
@@ -93,6 +149,9 @@ def test_report_exposes_incomplete_coverage_and_omits_input_contents():
     assert report["coverage"]["en"] == 1
     assert not report["coverage_sufficient"] and len(report["missing_languages"]) == 7
     assert report["confidence_threshold_crossings"] == 1
+    assert report["reaction_presence_changes"] == 0  # Legacy observations derive presence from source.
+    assert report["rows"][0]["confidence_delta"] == pytest.approx(0.09)
+    assert report["final_confidence_delta"]["mean_absolute"] == pytest.approx(0.09)
     assert report["final_label_agreement"] == 1
     assert report["summaries"]["new"]["reaction_sources"]["model"] == 1
     assert report["summaries"]["old"]["token_totals"] == {"total_tokens": 20}
@@ -108,16 +167,46 @@ def test_report_does_not_count_failed_pairs_as_agreement():
     assert report["final_label_agreement"] is None
 
 
-@pytest.mark.parametrize("content,status,source", [
-    ('```json\n{"emotion":"happy","confidence":0.9}\n```', "object", "rule"),
-    ('{"emotion":"happy","confidence":0.9,"emoji":"😊"}', "object", "model"),
-    ('{"emotion":"開心","confidence":0.9,"emoji":"😊"}', "object", "model"),
-    ('private provider output is not JSON', "parse_error", "none"),
+def test_reaction_presence_change_includes_neutral_without_confidence_crossing():
+    pair = {"old": {**_observation(label="neutral", score=0.9, source="none"),
+                    "reaction_present": False},
+            "new": {**_observation(score=0.9, source="model"), "reaction_present": True}}
+    report = evaluation.build_report(
+        [{"id": "x", "language": "en", "text": "hi"}], [pair], "a" * 40, 40, 64, 0.72,
+    )
+    assert report["confidence_threshold_crossings"] == 0
+    assert report["reaction_presence_changes"] == 1
+    assert report["rows"][0]["confidence_delta"] == 0
+
+
+def test_avatar_mismatch_counts_as_failed_observation():
+    pair = {"old": _observation(),
+            "new": {**_observation(), "avatar_update_matches_result": False}}
+    report = evaluation.build_report(
+        [{"id": "x", "language": "en", "text": "hi"}], [pair], "a" * 40, 40, 64, 0.72,
+    )
+    assert report["failed_calls"] == 1
+    assert report["summaries"]["new"]["avatar_update_mismatches"] == 1
+
+
+@pytest.mark.parametrize("content,status,source,emoji_status,raw_emoji", [
+    ('```json\n{"emotion":"happy","confidence":0.9}\n```', "object", "rule", "missing", None),
+    ('{"emotion":"happy","confidence":0.9,"emoji":"😊"}', "object", "model", "valid", "😊"),
+    ('{"emotion":"happy","confidence":0.9,"emoji":"🤗"}', "object", "model", "valid", "🤗"),
+    ('{"emotion":"開心","confidence":0.9,"emoji":"😊"}', "object", "model", "valid", "😊"),
+    ('{"emotion":"happy","confidence":0.9,"emoji":null}', "object", "rule", "null", None),
+    ('{"emotion":"happy","confidence":0.9,"emoji":"private-key EXFILTRATE"}',
+     "object", "rule", "invalid", None),
+    ('{"emotion":"happy","confidence":0.9,"emoji":["private-key"]}',
+     "object", "rule", "invalid", None),
+    ('private provider output is not JSON', "parse_error", "none", "missing", None),
 ])
-def test_observation_uses_endpoint_and_restores_side_effect_hooks(monkeypatch, content, status, source):
+def test_observation_uses_endpoint_and_restores_side_effect_hooks(
+    monkeypatch, content, status, source, emoji_status, raw_emoji,
+):
     emotion = importlib.import_module("main_routers.system_router.emotion")
     calls = []
-    writes = []
+    original_push = emotion._push_emotion_update
 
     class Client:
         async def __aenter__(self):
@@ -137,10 +226,10 @@ def test_observation_uses_endpoint_and_restores_side_effect_hooks(monkeypatch, c
         assert kwargs["max_completion_tokens"] == 64
         return Client()
 
-    def original_push(*args):
-        writes.append(args)
+    def forbidden_user_queue():
+        pytest.fail("The evaluator must not access the user's avatar queue")
 
-    monkeypatch.setattr(emotion, "_push_emotion_update", original_push)
+    monkeypatch.setattr(emotion, "get_sync_message_queue", forbidden_user_queue)
     monkeypatch.setattr(emotion, "create_chat_llm_async", factory)
     monkeypatch.setattr(emotion, "_infer_emotion_from_text", lambda text: (None, 0))
     sample = {"id": "private id", "language": "en", "text": "private reply"}
@@ -148,11 +237,26 @@ def test_observation_uses_endpoint_and_restores_side_effect_hooks(monkeypatch, c
         emotion, sample, {"model": "test", "api_key": "private-key"}, "fixed prompt", 64,
     ))
     assert len(calls) == 1 and calls[0][0]["content"] == "fixed prompt"
-    assert not writes and emotion._push_emotion_update is original_push
+    assert emotion._push_emotion_update is original_push
+    assert emotion.get_sync_message_queue is forbidden_user_queue
     assert result["parse_status"] == status
     assert result["reaction_source"] == source
+    assert result["raw_emoji_status"] == emoji_status and result["raw_emoji"] == raw_emoji
+    assert result["reaction_present"] == (source != "none")
+    assert result["avatar_update"] == {
+        "emotion": result["final_emotion"], "confidence": result["final_confidence"],
+    }
+    assert result["avatar_update_matches_result"]
+    if source == "model":
+        assert result["reaction_emoji"] == raw_emoji
+    elif source == "rule":
+        assert result["reaction_emoji"] in emotion.MESSAGE_REACTION_EMOJIS_BY_EMOTION["happy"]
+    else:
+        assert result["reaction_emoji"] is None
     assert result["usage"] == {"total_tokens": 10} and result["truncated"] is True
     assert "private" not in json.dumps(result)
+    report = evaluation.build_report([sample], [{"old": result, "new": result}], "a" * 40, 40, 64, 0.72)
+    assert "private" not in json.dumps(report)
 
 
 def test_cli_failure_is_nonzero_and_does_not_expose_error_message(monkeypatch, capsys):
@@ -160,7 +264,8 @@ def test_cli_failure_is_nonzero_and_does_not_expose_error_message(monkeypatch, c
         raise RuntimeError("private provider message, reply and key")
 
     monkeypatch.setattr(evaluation, "load_samples", fail)
-    code = evaluation.main(["--samples", "x", "--model-config", "y", "--report", "z"])
+    code = evaluation.main(["--samples", "x", "--model-config", "y", "--report", "z",
+                            "--baseline-ref", "HEAD"])
     assert code == 2 and "private" not in capsys.readouterr().err
 
 
@@ -182,6 +287,8 @@ from scripts import evaluate_emotion_reactions as evaluation
 from utils import llm_client
 from utils.token_tracker import TokenTracker, hooks
 from utils.llm_client.anthropic_client import _record_anthropic_token_usage
+evaluation.load_baseline = lambda ref: ("a" * 40,
+    {lang: "offline old prompt" for lang in evaluation.LANGUAGES}, 40)
 calls = []
 tracking = []
 class Client:
@@ -206,7 +313,8 @@ assert "main_logic.omni_realtime_client" not in sys.modules
            "NEKO_EVAL_OFFLINE_KEY": "offline-placeholder"}
     result = subprocess.run(
         [sys.executable, "-c", code, "--samples", str(samples), "--model-config", str(config),
-         "--report", str(report)], cwd=evaluation.REPO_ROOT, env=env,
+         "--report", str(report), "--baseline-ref", "offline-baseline"],
+        cwd=evaluation.REPO_ROOT, env=env,
         capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
     assert result.returncode == 0, result.stderr

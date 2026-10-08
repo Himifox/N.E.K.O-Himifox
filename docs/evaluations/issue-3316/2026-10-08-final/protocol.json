@@ -1,0 +1,17 @@
+{
+  "baseline_ref": "1d814cf32fba8c02b5727d2890710e4e7b8ece24",
+  "model": "qwen3.7-plus",
+  "temperature": 0.3,
+  "repeat_rounds": 3,
+  "generated_texts": 96,
+  "rule_fixtures": 72,
+  "planned_model_calls": 720,
+  "seed": 3316,
+  "scope": "both variants use current final postprocessing; prompt/budget comparison; memory avatar queue",
+  "reaction_policy": "valid model decision only; legal model emoji preferred; missing/invalid emoji -> rule random; corrected/degraded/error -> no reaction",
+  "limits": [
+    "generated model replies, not historical user replies",
+    "not real avatar/browser rendering",
+    "no noninferiority margin; stability not accuracy"
+  ]
+}
