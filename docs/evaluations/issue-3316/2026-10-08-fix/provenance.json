@@ -1,7 +1,0 @@
-{
-  "production_sha256": {
-    "config/prompts/prompts_emotion.py": "76fd7c85dcff1e5e9ee6a746c9530f6662d8514265aaa4dd2d168450b73e9528",
-    "main_routers/system_router/emotion.py": "70c850cdf3180e504d172db41b0c6d32b10c651ab162e3569e432a9685134a8f",
-    "scripts/evaluate_emotion_reactions.py": "a6f14570c3925763d735ec76834ec1a7a5fc2030e6383751c0269f282771fee2"
-  }
-}
