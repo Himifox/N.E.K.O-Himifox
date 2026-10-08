@@ -1007,6 +1007,7 @@ async def emotion_analysis(request: Request):
         # 尝试解析JSON响应
         emotion = "neutral"
         confidence = 0.5
+        decision_source = "degraded_fallback"
 
         def _apply_degraded_emotion_fallback():
             heuristic_emotion, heuristic_score = _infer_emotion_from_text(text)
@@ -1060,7 +1061,11 @@ async def emotion_analysis(request: Request):
                         emotion = heuristic_emotion
                         confidence = max(confidence, min(0.86, 0.44 + heuristic_score * 0.07))
                         decision_source = "heuristic_strong_override"
-                    elif heuristic_emotion == "sad" and emotion == "happy" and heuristic_score >= 2:
+                    # Keyword evidence cannot determine whose feelings were
+                    # quoted. Respect confident model attribution here too,
+                    # matching the strong-override confidence ceiling above.
+                    elif (heuristic_emotion == "sad" and emotion == "happy"
+                          and heuristic_score >= 2 and confidence < 0.8):
                         emotion = heuristic_emotion
                         confidence = max(confidence, min(0.84, 0.5 + heuristic_score * 0.08))
                         decision_source = "heuristic_sad_override"
@@ -1080,6 +1085,9 @@ async def emotion_analysis(request: Request):
         except ValueError:
             emotion, confidence = _apply_degraded_emotion_fallback()
 
+        # Avatar heuristics may recover a decision, but must not grant a
+        # message reaction on a corrected or degraded model result.
+        reaction_eligible = reaction_eligible and decision_source == "model"
         _push_emotion_update(lanlan_name, emotion, confidence)
         return _emotion_response(
             emotion, confidence, lanlan_name if reaction_eligible else None, model_emoji
