@@ -339,6 +339,27 @@ def test_delete_decodes_model_url_once(vrm_api, filename):
     assert other.read_bytes() == b"other sentinel"
 
 
+@pytest.mark.parametrize("filename", ["What?.vrm", 'Old:Avatar.VRM', 'Old*Avatar.vrm', 'Old|Avatar.vrm', 'Old"Avatar.vrm', 'Old<Avatar>.vrm'])
+@pytest.mark.parametrize("by_url", [False, True])
+def test_legacy_files_can_be_deleted_without_relaxing_upload_policy(vrm_api, filename, by_url):
+    client, config = vrm_api
+    assert not vrm_router._is_valid_vrm_model_name(filename[:-4])
+    assert vrm_router._is_vrm_basename(filename)
+    target = config.vrm_dir / filename
+    try:
+        target.write_bytes(b"legacy model")
+    except OSError:
+        pytest.skip("This filesystem cannot create the legacy filename")
+    other = config.vrm_dir / "Other.vrm"
+    other.write_bytes(b"sentinel")
+    assert client.post(f'{API}/upload', files={'file': (filename, b'new')}).status_code == 400
+    response = (client.request('DELETE', f'{API}/model', json={'url': '/user_vrm/' + quote(filename, safe='')})
+                if by_url else client.delete(f'{API}/model/' + quote(filename[:-4], safe='')))
+    assert response.status_code == 200
+    assert not target.exists()
+    assert other.read_bytes() == b"sentinel"
+
+
 @pytest.mark.parametrize("space_model_exists", [False, True])
 def test_delete_never_falls_back_to_encoded_filename(vrm_api, space_model_exists):
     client, config = vrm_api

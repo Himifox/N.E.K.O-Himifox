@@ -532,8 +532,7 @@ async def delete_vrm_model(request: Request):
             filename = unquote(rel, errors='strict')
         except UnicodeDecodeError:
             return JSONResponse(status_code=400, content={"success": False, "error": "无效的模型路径"})
-        if (not filename.lower().endswith('.vrm')
-                or not _is_valid_vrm_model_name(filename[:-4])):
+        if not _is_vrm_basename(filename):
             return JSONResponse(status_code=400, content={"success": False, "error": "无效的模型路径"})
         target = (vrm_dir / filename).resolve()
         if not target.is_relative_to(vrm_dir.resolve()):
@@ -650,6 +649,14 @@ def _find_vrm_model_file(vrm_dir: Path, model_name: str) -> Path | None:
     return None
 
 
+def _is_vrm_basename(filename: str) -> bool:
+    # Legacy files can violate the upload policy. Keep the directory boundary
+    # check in both deletion routes and reject path syntax here.
+    return filename.lower().endswith('.vrm') and not any(
+        char in filename for char in ('/', chr(92), chr(0))
+    )
+
+
 def _vrm_model_stem_exists(model_name: str, directories) -> bool:
     # Conservatively protect mappings shared on case-insensitive filesystems.
     return any(path.stem.casefold() == model_name.casefold()
@@ -683,7 +690,7 @@ def delete_vrm_model(model_name: str):
         vrm_dir = config_mgr.vrm_dir
 
         # 基本安全检查：不允许空名称或含路径分隔符
-        if not _is_valid_vrm_model_name(model_name):
+        if not model_name or not _is_vrm_basename(f"{model_name}.vrm"):
             return JSONResponse(status_code=400, content={"success": False, "error": f"无效的模型名称: {model_name!r}"})
 
         # 只允许删除用户目录下的 VRM 模型
