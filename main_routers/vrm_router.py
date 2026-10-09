@@ -554,11 +554,15 @@ DEFAULT_MOOD_MAP = {
 }
 
 
+def _is_valid_vrm_model_name(model_name: str) -> bool:
+    """Preserve filename stems while rejecting path syntax and reserved characters."""
+    # 保留上传时的原始名称；禁止路径分隔符、控制字符和 Windows 保留字符。
+    return bool(model_name) and re.search(r'[<>:"/\\|?*\x00-\x1f]', model_name) is None
+
+
 def _get_emotion_config_path(model_name: str) -> Path | None:
     """Get the emotion config file path for a model."""
-    # 允许 Unicode 单词字符、点、下划线、连字符（与 _get_model_path 保持一致）
-    safe_name = re.sub(r'[^\w.\-]', '', model_name, flags=re.UNICODE)
-    if not safe_name or safe_name != model_name:
+    if not _is_valid_vrm_model_name(model_name):
         logger.warning(f"无效的模型名称: {model_name!r}")
         return None
 
@@ -568,7 +572,7 @@ def _get_emotion_config_path(model_name: str) -> Path | None:
     config_dir = config_mgr.project_root / "static" / "vrm" / "configs"
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    config_path = config_dir / f"{safe_name}_emotion.json"
+    config_path = config_dir / f"{model_name}_emotion.json"
 
     # 验证解析后的路径仍在 config_dir 内
     try:
@@ -582,9 +586,7 @@ def _get_emotion_config_path(model_name: str) -> Path | None:
 
 def _get_model_path(model_name: str) -> tuple[Path | None, str]:
     """Get the VRM model file path; returns (path, url_prefix)."""
-    # 仅允许字母、数字、点、下划线、连字符（含 CJK 等 Unicode 单词字符）
-    safe_name = re.sub(r'[^\w.\-]', '', model_name, flags=re.UNICODE)
-    if not safe_name or safe_name != model_name:
+    if not _is_valid_vrm_model_name(model_name):
         logger.warning(f"无效的模型名称: {model_name!r}")
         return None, ""
 
@@ -593,7 +595,7 @@ def _get_model_path(model_name: str) -> tuple[Path | None, str]:
 
     # 1. 检查项目目录
     static_vrm_dir = project_root / "static" / "vrm"
-    static_vrm_path = static_vrm_dir / f"{safe_name}.vrm"
+    static_vrm_path = static_vrm_dir / f"{model_name}.vrm"
     try:
         resolved = static_vrm_path.resolve()
         resolved.relative_to(static_vrm_dir.resolve())
@@ -605,7 +607,7 @@ def _get_model_path(model_name: str) -> tuple[Path | None, str]:
 
     # 2. 检查用户目录
     config_mgr.ensure_vrm_directory()
-    user_vrm_path = config_mgr.vrm_dir / f"{safe_name}.vrm"
+    user_vrm_path = config_mgr.vrm_dir / f"{model_name}.vrm"
     try:
         resolved = user_vrm_path.resolve()
         resolved.relative_to(config_mgr.vrm_dir.resolve())
