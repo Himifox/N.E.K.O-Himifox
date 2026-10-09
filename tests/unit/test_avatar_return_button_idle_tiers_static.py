@@ -1193,6 +1193,27 @@ def test_pngtuber_return_replays_model_enter_animation_after_preparing_container
     assert branch.index("prepareModelReturnContainer(pngtuberContainer, modelReturnEnterRect, { clearPointerEvents: true });") < branch.index("playModelReturnEnter(pngtuberContainer, modelReturnEnterRect);")
 
 
+def test_pngtuber_show_without_return_rect_clears_prepared_inline_opacity():
+    # prepareModelReturnContainer leaves inline opacity:1 / transition:none when there is
+    # no return rect. Inline opacity outranks #pngtuber-container.locked-hover-fade, so the
+    # locked hover fade only works if the no-rect path clears both (flush first so the
+    # minimized -> visible snap does not animate).
+    source = read_js_parts(APP_UI_PATH)
+    branch = source[
+        source.index("} else if (effectiveModelType === 'pngtuber') {"):
+        source.index("const live2dContainerPngtuber = document.getElementById('live2d-container');")
+    ]
+
+    enter_call = branch.index("playModelReturnEnter(pngtuberContainer, modelReturnEnterRect);")
+    no_rect_branch = branch[
+        branch.index("} else {", enter_call):
+        branch.index("pngtuberContainer.style.setProperty('pointer-events', 'none', 'important');")
+    ]
+    flush = no_rect_branch.index("void pngtuberContainer.offsetWidth;")
+    assert flush < no_rect_branch.index("pngtuberContainer.style.removeProperty('transition');")
+    assert flush < no_rect_branch.index("pngtuberContainer.style.removeProperty('opacity');")
+
+
 def test_return_button_idle_tier_styles_are_present():
     source = INDEX_CSS_PATH.read_text(encoding="utf-8")
     app_ui_source = read_js_parts(APP_UI_PATH)
