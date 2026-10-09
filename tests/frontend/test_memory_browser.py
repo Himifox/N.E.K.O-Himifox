@@ -74,7 +74,7 @@ def _install_delayed_memory_toggle_routes(page: Page, memory_file: Path, endpoin
                 window.__memoryConfigPostCount += 1;
             }
             const response = await nativeFetch(input, options);
-            if (url.pathname === target && (!options || !options.method || options.method === 'GET')) {
+            if (response.ok && url.pathname === target && (!options || !options.method || options.method === 'GET')) {
                 const readJson = response.json.bind(response);
                 response.json = async function () {
                     const snapshot = await readJson();
@@ -5203,6 +5203,7 @@ def test_memory_browser_failed_initial_read_can_retry(
     expect(mock_page.locator(f"#{text_id}")).to_have_attribute("data-i18n", "common.loadFailed")
     expect(checkbox).to_be_disabled()
     expect(retry).to_be_visible()
+    expect(mock_page.locator(f"#{checkbox_id.removesuffix('-checkbox')}-repair")).to_be_hidden()
     mock_page.locator(f"label.auto-review-toggle-btn[for='{checkbox_id}']").click(force=True)
     retry.click()
     expect(checkbox).to_be_enabled()
@@ -6261,11 +6262,22 @@ def _hold_memory_toggle_request(page: Page, endpoint: str, method: str, stage: s
 @pytest.mark.frontend
 @pytest.mark.parametrize("endpoint,checkbox_id,text_id", MEMORY_TOGGLE_CONFIGS, ids=["review", "powerful"])
 @pytest.mark.parametrize("stage", ["headers", "body"])
+@pytest.mark.parametrize("status", [200, 503])
 def test_memory_browser_toggle_read_timeout_can_retry(
-    mock_page: Page, running_server: str, seed_memory_file, endpoint, checkbox_id, text_id, stage
+    mock_page: Page, running_server: str, seed_memory_file, endpoint, checkbox_id, text_id, stage, status
 ):
-    """Both a pending fetch and a pending JSON body must reach the retry state."""
+    """Successful and failed response bodies must both obey the request deadline."""
     _install_ready_memory_browser_routes(mock_page, seed_memory_file)
+    reads = []
+
+    def handle_config(route):
+        reads.append(True)
+        if status == 503 and len(reads) == 1:
+            route.fulfill(status=503, json={"error": "read failed"})
+        else:
+            route.fulfill(status=200, json={"enabled": True})
+
+    mock_page.route(f"**{endpoint}", handle_config)
     _hold_memory_toggle_request(mock_page, endpoint, "GET", stage)
     mock_page.goto(f"{running_server}/memory_browser")
     mock_page.wait_for_function("window.__memoryToggleRequestHeld === true")
@@ -6353,3 +6365,95 @@ def test_memory_browser_toggle_save_and_recovery_timeout_can_retry(
     expect(checkbox).to_be_enabled()
     expect(checkbox).to_be_focused()
     assert mock_page.evaluate("window.__memoryTogglePostCount") == 1
+
+
+@pytest.mark.frontend
+@pytest.mark.parametrize("endpoint,checkbox_id,text_id", MEMORY_TOGGLE_CONFIGS, ids=["review", "powerful"])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("save_succeeds", [False, True])
+def test_memory_browser_toggle_legacy_value_explicit_repair(
+    mock_page: Page, running_server: str, seed_memory_file, endpoint, checkbox_id, text_id, enabled, save_succeeds
+):
+    """Repair requires a deliberate value and recovers focus or remains safely retryable."""
+    _install_ready_memory_browser_routes(mock_page, seed_memory_file)
+    state = {"enabled": None, "posts": []}
+
+    def handle_config(route):
+        if route.request.method == "POST":
+            state["posts"].append(_request_json(route))
+            if save_succeeds:
+                state["enabled"] = state["posts"][-1]["enabled"]
+                route.fulfill(status=200, json={"success": True, "enabled": state["enabled"]})
+            else:
+                route.fulfill(status=200, json={"success": False, "error": "migration failed"})
+        elif state["enabled"] is None:
+            route.fulfill(status=503, json={"error": "Invalid value", "code": "invalid_memory_setting"})
+        else:
+            route.fulfill(status=200, json={"enabled": state["enabled"]})
+
+    mock_page.route(f"**{endpoint}", handle_config)
+    mock_page.goto(f"{running_server}/memory_browser")
+    _open_auxiliary_panel(mock_page, "settings")
+    checkbox = mock_page.locator(f"#{checkbox_id}")
+    repair = mock_page.locator(f"#{checkbox_id.removesuffix('-checkbox')}-repair")
+    expect(checkbox).to_be_disabled()
+    expect(repair).to_be_visible()
+    expect(mock_page.locator(f"#{checkbox_id.removesuffix('-checkbox')}-status")).to_have_attribute(
+        "data-i18n", "memory.invalidToggleValue"
+    )
+    assert state["posts"] == []
+    button = repair.locator(f"button[data-enabled='{str(enabled).lower()}']")
+    button.focus()
+    button.press("Enter")
+
+    if save_succeeds:
+        expect(checkbox).to_be_enabled()
+        expect(checkbox).to_be_checked(checked=enabled)
+        expect(checkbox).to_be_focused()
+        expect(repair).to_be_hidden()
+        expect(mock_page.locator(f"#{text_id}")).to_have_attribute(
+            "data-i18n", "memory.enabled" if enabled else "memory.disabled"
+        )
+    else:
+        expect(repair).to_be_visible()
+        expect(checkbox).to_be_disabled()
+        expect(mock_page.locator(f"#{checkbox_id.removesuffix('-checkbox')}-retry")).to_be_focused()
+    assert state["posts"] == [{"enabled": enabled}]
+
+
+@pytest.mark.frontend
+@pytest.mark.parametrize("endpoint,checkbox_id,text_id", MEMORY_TOGGLE_CONFIGS, ids=["review", "powerful"])
+def test_memory_browser_toggle_legacy_repair_is_not_resent_after_timeout(
+    mock_page: Page, running_server: str, seed_memory_file, endpoint, checkbox_id, text_id
+):
+    """Repair saves share the existing timeout, readback and duplicate-submit guards."""
+    _install_ready_memory_browser_routes(mock_page, seed_memory_file)
+    state = {"enabled": None, "posts": []}
+
+    def handle_config(route):
+        if route.request.method == "POST":
+            state["posts"].append(_request_json(route))
+            state["enabled"] = state["posts"][-1]["enabled"]
+            route.fulfill(status=200, json={"success": True, "enabled": state["enabled"]})
+        elif state["enabled"] is None:
+            route.fulfill(status=503, json={"error": "Invalid value", "code": "invalid_memory_setting"})
+        else:
+            route.fulfill(status=200, json={"enabled": state["enabled"]})
+
+    mock_page.route(f"**{endpoint}", handle_config)
+    _hold_memory_toggle_request(mock_page, endpoint, "POST", "headers")
+    mock_page.goto(f"{running_server}/memory_browser")
+    _open_auxiliary_panel(mock_page, "settings")
+    repair_id = f"{checkbox_id.removesuffix('-checkbox')}-repair"
+    repair = mock_page.locator(f"#{repair_id}")
+    expect(repair).to_be_visible()
+    repair.locator("button[data-enabled='false']").click()
+    mock_page.wait_for_function("window.__memoryToggleRequestHeld === true")
+    mock_page.evaluate("id => document.querySelector('#' + id + ' button[data-enabled=\"true\"]').click()", repair_id)
+    assert state["posts"] == [{"enabled": False}]
+    expect(repair).to_be_hidden()
+    expect(mock_page.locator(f"#{checkbox_id}")).to_be_disabled()
+    mock_page.clock.fast_forward(30001)
+    expect(mock_page.locator(f"#{checkbox_id}")).to_be_enabled()
+    expect(mock_page.locator(f"#{checkbox_id}")).not_to_be_checked()
+    assert state["posts"] == [{"enabled": False}]

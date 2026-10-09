@@ -1485,6 +1485,10 @@ async def update_catgirl_name(request: Request):
         return {"success": False, "error": str(exc)}
 
 
+class _InvalidMemoryToggleValue(ValueError):
+    """A readable configuration contains a setting that can be explicitly repaired."""
+
+
 def _load_memory_toggle_config(config_manager):
     """Default a missing file to an empty object without hiding read errors."""
     try:
@@ -1502,7 +1506,7 @@ def _load_memory_toggle_enabled(config_manager, key):
     config_data = _load_memory_toggle_config(config_manager)
     enabled = config_data.get(key, True)
     if not isinstance(enabled, bool):
-        raise ValueError('Invalid memory setting value')
+        raise _InvalidMemoryToggleValue('Invalid memory setting value')
     return enabled
 
 
@@ -1519,7 +1523,10 @@ async def get_review_config():
         return {"enabled": enabled}
     except Exception as e:
         logger.error(f"读取记忆整理配置失败: {e}")
-        return JSONResponse({"error": "Failed to read memory review configuration"}, status_code=503)
+        error = {"error": "Failed to read memory review configuration"}
+        if isinstance(e, _InvalidMemoryToggleValue):
+            error["code"] = "invalid_memory_setting"
+        return JSONResponse(error, status_code=503)
 
 
 @router.post('/review_config')
@@ -1571,7 +1578,10 @@ async def get_powerful_memory_config():
         return {"enabled": enabled}
     except Exception as e:
         logger.error(f"读取强力记忆配置失败: {e}")
-        return JSONResponse({"error": "Failed to read powerful memory configuration"}, status_code=503)
+        error = {"error": "Failed to read powerful memory configuration"}
+        if isinstance(e, _InvalidMemoryToggleValue):
+            error["code"] = "invalid_memory_setting"
+        return JSONResponse(error, status_code=503)
 
 
 @router.post('/powerful_memory_config')
@@ -1613,7 +1623,8 @@ async def update_powerful_memory_config(request: Request):
             # `from memory_server import ...` 拿到的是 fresh 副本，reflection_engine
             # 是 None，migration 会静默 no-op。memory_server 跑在独立进程
             # (MEMORY_SERVER_PORT)，那里 reflection_engine 由 startup hook 初始化。
-            if prev_enabled and not enabled:
+            # Only a confirmed false may skip migration; legacy values are unknown.
+            if prev_enabled is not False and not enabled:
                 try:
                     from config import MEMORY_SERVER_PORT
                     from utils.internal_http_client import get_internal_http_client

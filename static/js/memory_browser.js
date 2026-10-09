@@ -4839,6 +4839,14 @@
             if (retry) {
                 retry.addEventListener('click', () => loadMemoryToggleConfig(setting));
             }
+            const repair = document.getElementById(`${setting.id}-toggle-repair`);
+            if (repair) {
+                repair.querySelectorAll('button[data-enabled]').forEach(button => {
+                    button.addEventListener('click', () => {
+                        saveMemoryToggleConfig(setting, button.dataset.enabled === 'true');
+                    });
+                });
+            }
             renderMemoryToggle(setting);
         });
         initMemoryExportLogs();
@@ -5095,7 +5103,9 @@
         const busy = setting.phase === 'loading' || setting.phase === 'saving';
         const disabled = memoryStorageLimited || setting.phase !== 'ready';
         const retry = document.getElementById(`${setting.id}-toggle-retry`);
-        if (busy && (document.activeElement === checkbox || document.activeElement === retry)) {
+        const repair = document.getElementById(`${setting.id}-toggle-repair`);
+        if (busy && (document.activeElement === checkbox || document.activeElement === retry
+            || (repair && repair.contains(document.activeElement)))) {
             setting.restoreFocus = true;
         }
         checkbox.disabled = disabled;
@@ -5107,19 +5117,23 @@
 
         let statusKey = '';
         if (!limited) {
-            if (setting.phase === 'error') statusKey = 'common.loadFailed';
+            if (setting.phase === 'error') statusKey = setting.repairable
+                ? 'memory.invalidToggleValue' : 'common.loadFailed';
             else if (setting.phase !== 'ready') statusKey = 'common.loading';
             else if (setting.saveFailed) statusKey = 'memory.saveFailedGeneral';
         }
         const valueKey = checkbox.checked ? 'memory.enabled' : 'memory.disabled';
         const statusFallback = statusKey === 'common.loading' ? '加载中...'
-            : statusKey === 'common.loadFailed' ? '加载失败' : '保存失败';
-        const textKey = setting.phase === 'ready' || limited ? valueKey : statusKey;
+            : statusKey === 'common.loadFailed' ? '加载失败'
+            : statusKey === 'memory.invalidToggleValue' ? '此设置的值无效，请选择开启或关闭以修复。' : '保存失败';
+        const textKey = setting.phase === 'ready' || limited ? valueKey
+            : setting.repairable && setting.phase === 'error' ? 'common.loadFailed' : statusKey;
         const text = document.getElementById(`${setting.id}-toggle-text`);
         if (text) {
             text.setAttribute('data-i18n', textKey);
             text.textContent = translate(textKey, textKey === valueKey
-                ? (checkbox.checked ? '已开启' : '已关闭') : statusFallback);
+                ? (checkbox.checked ? '已开启' : '已关闭')
+                : textKey === 'common.loadFailed' ? '加载失败' : statusFallback);
         }
         const status = document.getElementById(`${setting.id}-toggle-status`);
         if (status) {
@@ -5134,6 +5148,7 @@
             status.parentElement.hidden = !statusKey;
         }
         if (retry) retry.hidden = memoryStorageLimited || setting.phase !== 'error';
+        if (repair) repair.hidden = memoryStorageLimited || setting.phase !== 'error' || !setting.repairable;
         if (!busy && setting.restoreFocus) {
             setting.restoreFocus = false;
             const target = setting.phase === 'error' ? retry : checkbox;
@@ -5150,9 +5165,14 @@
         const timeout = setTimeout(() => controller.abort(), MEMORY_TOGGLE_REQUEST_TIMEOUT_MS);
         try {
             const resp = await fetch(setting.endpoint, { ...options, signal: controller.signal });
-            if (!resp.ok) throw new Error(`Config request failed: ${resp.status}`);
             // Keep the deadline active until the response body has also been read.
-            return await resp.json();
+            const data = await resp.json();
+            if (!resp.ok) {
+                const error = new Error(`Config request failed: ${resp.status}`);
+                error.repairable = resp.status === 503 && data && data.code === 'invalid_memory_setting';
+                throw error;
+            }
+            return data;
         } finally {
             clearTimeout(timeout);
         }
@@ -5161,6 +5181,7 @@
     async function loadMemoryToggleConfig(setting) {
         if (memoryStorageLimited || setting.phase === 'loading' || setting.phase === 'saving') return;
         setting.phase = 'loading';
+        setting.repairable = false;
         renderMemoryToggle(setting);
         try {
             const data = await requestMemoryToggleConfig(setting);
@@ -5172,18 +5193,21 @@
         } catch (error) {
             console.error('[MemoryBrowser] Failed to load setting:', setting.endpoint, error);
             setting.phase = 'error';
+            setting.repairable = error.repairable === true;
         }
         renderMemoryToggle(setting);
     }
 
     async function saveMemoryToggleConfig(setting, enabled) {
-        // A setting has one request at a time, starting only from a confirmed read.
-        if (memoryStorageLimited || setting.phase !== 'ready') {
+        // Unknown legacy values require an explicit repair choice instead of a guessed toggle.
+        const canRepair = setting.phase === 'error' && setting.repairable;
+        if (memoryStorageLimited || (setting.phase !== 'ready' && !canRepair)) {
             renderMemoryToggle(setting);
             return;
         }
         setting.pendingEnabled = enabled;
         setting.phase = 'saving';
+        setting.repairable = false;
         setting.saveFailed = false;
         renderMemoryToggle(setting);
         try {

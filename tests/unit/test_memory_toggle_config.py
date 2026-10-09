@@ -87,6 +87,7 @@ def test_memory_setting_reads_reject_invalid_files(setting_client, endpoint, key
 
     assert response.status_code == 503
     assert "enabled" not in response.json()
+    assert "code" not in response.json()
     assert path.read_bytes() == payload
 
 
@@ -102,6 +103,7 @@ def test_memory_setting_reads_reject_non_boolean_values(setting_client, endpoint
 
     assert response.status_code == 503
     assert "enabled" not in response.json()
+    assert response.json()["code"] == "invalid_memory_setting"
     assert path.read_bytes() == payload
 
 
@@ -116,6 +118,7 @@ def test_memory_setting_reads_reject_permission_errors(setting_client, endpoint,
 
     assert response.status_code == 503
     assert "enabled" not in response.json()
+    assert "code" not in response.json()
     assert path.read_bytes() == payload
 
 
@@ -320,3 +323,61 @@ async def test_memory_setting_readback_waits_for_pending_write(setting_client, m
         {"enabled": expected[setting]} for _, setting in SETTINGS
     ]
     assert json.loads(path.read_text(encoding="utf-8")) == expected
+
+
+@pytest.mark.parametrize("endpoint,key", SETTINGS)
+@pytest.mark.parametrize("old_value", [False, True, None, 0, 1, "false", [], {}])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_memory_setting_post_can_repair_legacy_values(setting_client, monkeypatch, endpoint, key, old_value, enabled):
+    """Only confirmed false may skip migration when explicitly saving off."""
+    client, manager = setting_client
+    path = manager.config_dir / "core_config.json"
+    initial = {key: old_value, "unrelated": {"keep": True}}
+    path.write_text(json.dumps(initial), encoding="utf-8")
+    migrations = []
+
+    async def migrate(*args, **kwargs):
+        migrations.append(True)
+        assert json.loads(path.read_text(encoding="utf-8")) == initial
+        return SimpleNamespace(status_code=200, json=lambda: {"ok": True, "count": 1})
+
+    from utils import internal_http_client
+    monkeypatch.setattr(internal_http_client, "get_internal_http_client", lambda: SimpleNamespace(post=migrate))
+    response = client.post(f"/api/memory/{endpoint}", json={"enabled": enabled})
+
+    assert response.json() == {"success": True, "enabled": enabled}
+    assert len(migrations) == int(endpoint == "powerful_memory_config" and enabled is False and old_value is not False)
+    assert json.loads(path.read_text(encoding="utf-8")) == {**initial, key: enabled}
+    assert client.get(f"/api/memory/{endpoint}").json() == {"enabled": enabled}
+
+
+@pytest.mark.parametrize("old_value", [None, 0, 1, "false", [], {}])
+def test_memory_setting_legacy_repair_preserves_file_when_migration_fails(setting_client, monkeypatch, old_value):
+    client, manager = setting_client
+    path = manager.config_dir / "core_config.json"
+    before = json.dumps({"powerful_memory_enabled": old_value, "unrelated": "keep"}).encode()
+    path.write_bytes(before)
+
+    async def migrate(*args, **kwargs):
+        return SimpleNamespace(status_code=200, json=lambda: {"ok": False, "error": "migration failed"})
+
+    from utils import internal_http_client
+    monkeypatch.setattr(internal_http_client, "get_internal_http_client", lambda: SimpleNamespace(post=migrate))
+    response = client.post("/api/memory/powerful_memory_config", json={"enabled": False})
+    assert response.json()["success"] is False
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("endpoint,key", SETTINGS)
+def test_memory_setting_reads_identify_repairable_values_independently(setting_client, endpoint, key):
+    client, manager = setting_client
+    path = manager.config_dir / "core_config.json"
+    other_endpoint, other_key = next(item for item in SETTINGS if item[0] != endpoint)
+    before = json.dumps({key: None, other_key: False, "unrelated": "keep"}).encode()
+    path.write_bytes(before)
+    response = client.get(f"/api/memory/{endpoint}")
+    assert response.status_code == 503
+    assert response.json()["code"] == "invalid_memory_setting"
+    assert "enabled" not in response.json()
+    assert client.get(f"/api/memory/{other_endpoint}").json() == {"enabled": False}
+    assert path.read_bytes() == before
