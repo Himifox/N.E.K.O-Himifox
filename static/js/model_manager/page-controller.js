@@ -2897,7 +2897,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 const vrmFilename = vrmPath.split(/[/\\]/).pop();
                                 const matchedOption = Array.from(vrmModelSelect.options).find(opt => {
                                     if (!opt.value) return false;
-                                    return opt.value === vrmPath;
+                                    return (opt.getAttribute('data-path') || opt.value) === vrmPath;
                                 }) || Array.from(vrmModelSelect.options).find(opt => {
                                     if (!opt.value) return false;
                                     const optFilename = opt.getAttribute('data-filename') || '';

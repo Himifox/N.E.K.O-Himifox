@@ -259,6 +259,45 @@ def test_deleting_last_uppercase_model_removes_mapping(vrm_api, by_url):
     assert not (config.project_root / 'static' / 'vrm' / 'configs' / 'Avatar_emotion.json').exists()
 
 
+@pytest.mark.parametrize('by_url', [False, True])
+@pytest.mark.parametrize('subdir', ['', 'nested'])
+def test_deleting_user_model_preserves_workshop_mapping(vrm_api, tmp_path, monkeypatch, by_url, subdir):
+    client, config = vrm_api
+    item = tmp_path / 'workshop' / '123'
+    directory = item / subdir
+    directory.mkdir(parents=True)
+    (directory / 'Avatar.VRM').write_bytes(b'workshop sentinel')
+    monkeypatch.setattr(vrm_router, 'get_subscribed_workshop_items', AsyncMock(return_value={
+        'success': True, 'items': [{'installedFolder': str(item), 'publishedFileId': '123'}],
+    }))
+    (config.vrm_dir / 'Avatar.vrm').write_bytes(b'user model')
+    mapping = {'happy': ['workshop smile']}
+    assert client.post(f'{API}/emotion_mapping/Avatar', json=mapping).status_code == 200
+    response = (client.request('DELETE', f'{API}/model', json={'url': '/user_vrm/Avatar.vrm'})
+                if by_url else client.delete(f'{API}/model/Avatar'))
+    assert response.status_code == 200
+    assert not (config.vrm_dir / 'Avatar.vrm').exists()
+    assert (directory / 'Avatar.VRM').read_bytes() == b'workshop sentinel'
+    assert client.get(f'{API}/emotion_mapping/Avatar').json()['config'] == mapping
+
+
+@pytest.mark.parametrize('by_url', [False, True])
+@pytest.mark.parametrize('failure', ['response', 'exception'])
+def test_delete_preserves_mapping_if_workshop_check_fails(vrm_api, monkeypatch, by_url, failure):
+    client, config = vrm_api
+    (config.vrm_dir / 'Avatar.vrm').write_bytes(b'user model')
+    mapping = {'happy': ['smile']}
+    assert client.post(f'{API}/emotion_mapping/Avatar', json=mapping).status_code == 200
+    query = AsyncMock(return_value={'success': False})
+    if failure == 'exception':
+        query.side_effect = RuntimeError('workshop unavailable')
+    monkeypatch.setattr(vrm_router, 'get_subscribed_workshop_items', query)
+    response = (client.request('DELETE', f'{API}/model', json={'url': '/user_vrm/Avatar.vrm'})
+                if by_url else client.delete(f'{API}/model/Avatar'))
+    assert response.status_code == 200
+    assert client.get(f'{API}/emotion_mapping/Avatar').json()['config'] == mapping
+
+
 def test_existing_same_stem_files_remain_listed_in_mapping_precedence(vrm_api):
     client, config = vrm_api
     upper = config.vrm_dir / 'Avatar.VRM'

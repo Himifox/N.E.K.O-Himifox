@@ -541,7 +541,7 @@ async def delete_vrm_model(request: Request):
             return JSONResponse(status_code=404, content={"success": False, "error": "模型文件不存在"})
 
         target.unlink()
-        _cleanup_vrm_emotion_mapping(target.stem)
+        await _cleanup_vrm_emotion_mapping(target.stem)
         logger.info(f"已删除 VRM 模型: {target.name}")
 
         return JSONResponse(content={"success": True, "message": f"VRM 模型 {target.stem} 已删除"})
@@ -663,14 +663,25 @@ def _vrm_model_stem_exists(model_name: str, directories) -> bool:
                for directory in directories for path in _iter_vrm_model_files(directory))
 
 
-def _cleanup_vrm_emotion_mapping(model_name: str):
+async def _cleanup_vrm_emotion_mapping(model_name: str):
     # Built-in/user models and case-variant extensions intentionally share a mapping.
     try:
         config_mgr = get_config_manager()
-        directories = (config_mgr.project_root / 'static' / 'vrm', config_mgr.vrm_dir)
+        directories = [config_mgr.project_root / 'static' / 'vrm', config_mgr.vrm_dir]
         emotion_config = _get_emotion_config_path(model_name)
         if not emotion_config or not emotion_config.is_file():
             return
+        workshop = await get_subscribed_workshop_items()
+        if not isinstance(workshop, dict) or not workshop.get('success'):
+            raise RuntimeError("无法确认创意工坊的共享映射")
+        for item in workshop.get('items', []):
+            installed_folder = item.get('installedFolder')
+            if not installed_folder or not item.get('publishedFileId'):
+                continue
+            folder = Path(installed_folder)
+            if folder.is_dir():
+                directories.append(folder)
+                directories.extend(child for child in folder.iterdir() if child.is_dir())
         for directory in directories:
             for model in _iter_vrm_model_files(directory):
                 other_config = emotion_config.parent / f"{model.stem}_emotion.json"
@@ -682,7 +693,7 @@ def _cleanup_vrm_emotion_mapping(model_name: str):
 
 
 @router.delete('/model/{model_name}')
-def delete_vrm_model(model_name: str):
+async def delete_vrm_model(model_name: str):
     """Delete the specified user-imported VRM model."""
     try:
         config_mgr = get_config_manager()
@@ -703,7 +714,7 @@ def delete_vrm_model(model_name: str):
 
         vrm_path.unlink()
 
-        _cleanup_vrm_emotion_mapping(model_name)
+        await _cleanup_vrm_emotion_mapping(model_name)
 
         logger.info(f"已删除VRM模型: {model_name}")
         return {"success": True, "message": f"模型 {model_name} 已成功删除"}

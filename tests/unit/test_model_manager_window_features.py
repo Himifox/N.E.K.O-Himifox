@@ -66,6 +66,26 @@ let loads = 0;
 """)
 
 
+def test_live3d_switch_selects_exact_raw_vrm_path_before_filename_fallback():
+    source = Path("static/js/model_manager/page-controller.js").read_text(encoding="utf-8")
+    start = source.index("const tryMatchVrm = () =>")
+    matching = source[start:source.index("if (activeSubType === 'mmd')", start)]
+    run_model_manager_node(f"""
+const assert = require('node:assert/strict');
+const name = '猫娘 Avatar.vrm';
+const _vrmPathSwitch = '/user_vrm/' + name;
+const option = prefix => ({{value: prefix + encodeURIComponent(name), getAttribute: key =>
+    key === 'data-path' ? prefix + name : key === 'data-filename' ? name : null}});
+const vrmModelSelect = {{options: [option('/static/vrm/'), option('/user_vrm/')]}};
+let changed = 0;
+const dispatchModelManagerChange = () => {{changed++;}};
+{matching}
+assert.equal(tryMatchVrm(), true);
+assert.equal(vrmModelSelect.value, '/user_vrm/' + encodeURIComponent(name));
+assert.equal(changed, 1);
+""")
+
+
 MODEL_MANAGER_PART_NAMES = (
     "named-window-registration.js",
     "runtime-loaders.js",
