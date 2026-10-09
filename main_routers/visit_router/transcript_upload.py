@@ -52,7 +52,7 @@ import os
 import time
 import weakref
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -207,6 +207,9 @@ class UploadJournal:
         self._fd: int | None = None
         self._executor: concurrent.futures.ThreadPoolExecutor | None = None
         self._sealed = False
+        self._seal_write: asyncio.Future | None = None
+        self._open_abandoned = False
+        self._abandoned_tail: list[bytes] = []
         self._failed_writes = 0
 
     @property
@@ -302,13 +305,16 @@ class UploadJournal:
         # 先登记再建文件：流水一出现在磁盘上，重试轮次就必须认得它还开着，不能趁建文件的间隙重封
         added = self.visit_id not in _open_streams
         _open_streams.add(self.visit_id)
-        opening = asyncio.wrap_future(executor.submit(self._open_sync, _encode_record(header)))
+        open_job = executor.submit(self._open_sync, _encode_record(header))
+        opening = asyncio.wrap_future(open_job)
         try:
             self._fd = await asyncio.shield(opening)
         except BaseException:
             # 被取消时线程里的建文件可能还在跑：等它结束（等的过程中再被取消也照等），关掉拿到的 fd、
-            # 删掉只写了头的流水，之后才撤销登记——否则重试轮次会把一份仍开着的流水当成孤立文件重封
-            while not opening.done():
+            # 删掉只写了头的流水，之后才撤销登记——否则重试轮次会把一份仍开着的流水当成孤立文件重封。
+            # 关机时（abandon_open）不等：进程马上退出，本进程没有重试轮次，留下的流水由下次启动补录。
+            # 这只让事件循环不被挂住；卡在建文件里的线程池线程不是 daemon，解释器退出时仍会等它
+            while not opening.done() and not self._open_abandoned:
                 try:
                     await asyncio.shield(opening)
                 except asyncio.CancelledError:
@@ -317,14 +323,24 @@ class UploadJournal:
                     break
             fd = opening.result() if opening.done() and not opening.cancelled() \
                 and opening.exception() is None else None
-            if fd is not None:
-                with contextlib.suppress(OSError):
-                    os.close(fd)
-                with contextlib.suppress(OSError):
-                    self.stream_path.unlink(missing_ok=True)
+            if self._open_abandoned:
+                # 关机放弃：等上传头期间攒下的记录（可能为空）排在建文件之后由写线程补上（同一条单线程队列，
+                # 先头后行）再关 fd。建成的流水一律留着给下次启动补录（只有头也要留：零行转录与用量也得上传）；
+                # 没建成就什么都不写。登记一直留到补写关掉 fd 之后：这期间上传 worker 不会把还在写的流水
+                # 当孤立文件重封（建文件卡住就一直留着，进程马上退出，下次启动的补录照常处理）
+                finishing = executor.submit(self._finish_abandoned_open, open_job, list(self._abandoned_tail))
+                if added:
+                    visit_id = self.visit_id
+                    finishing.add_done_callback(lambda _f: _open_streams.discard(visit_id))
+            else:
+                if fd is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                    with contextlib.suppress(OSError):
+                        self.stream_path.unlink(missing_ok=True)
+                if added:
+                    _open_streams.discard(self.visit_id)
             executor.shutdown(wait=False)
-            if added:
-                _open_streams.discard(self.visit_id)
             raise
         self._executor = executor
         self._records = [header]
@@ -335,6 +351,67 @@ class UploadJournal:
         self, *, lp: int, side: str, speaker: str, ts: float, text: str, truncated: bool,
     ) -> None:
         """Record one final line (either side) and wait until it is written."""
+        record = self._book(lp=lp, side=side, speaker=speaker, ts=ts, text=text, truncated=truncated)
+        # 已登记的一行不因调用方被取消而撤回
+        await asyncio.shield(self._submit(self._append_sync, _encode_record(record)))
+
+    def book_line(
+        self, *, lp: int, side: str, speaker: str, ts: float, text: str, truncated: bool,
+    ) -> None:
+        """Record one final line now and write it in the background (lines buffered before the header).
+
+        Synchronous like :meth:`note_usage`: the in-memory copy (what
+        :meth:`seal` writes) has the line at once; the stream write keeps its
+        order on the single writer thread.
+        """
+        self._fire(self._book(lp=lp, side=side, speaker=speaker, ts=ts, text=text, truncated=truncated))
+
+    def remember_line(
+        self, *, lp: int, side: str, speaker: str, ts: float, text: str, truncated: bool,
+    ) -> None:
+        """Keep a line in the in-memory copy only (the stream could not be created; nothing is written).
+
+        ``lines()`` (the ``GET /state`` replay, the debrief) still sees it;
+        there is no upload without a stream.
+        """
+        if self._executor is not None or self._sealed:
+            return
+        if side not in SIDE_RANK or speaker not in SPEAKERS:
+            raise ValueError("bad line side / speaker")
+        self._records.append({"kind": "line", "lp": int(lp), "side": side, "from": speaker, "ts": float(ts),
+                              "text": str(text), "truncated": bool(truncated)})
+
+    def abandon_open(self, records: Iterable[Mapping[str, Any]] = ()) -> None:
+        """Shutdown: a cancelled :meth:`open` stops at once instead of waiting for the stalled create.
+
+        The process is about to exit; whatever the writer thread leaves on
+        disk is a stream the startup recovery seals. ``records`` (stream
+        records buffered while the header was being written) are queued on
+        the writer thread right after the create, so that stream has them.
+        """
+        self._open_abandoned = True
+        self._abandoned_tail = [_encode_record(record) for record in records]
+
+    @staticmethod
+    def _finish_abandoned_open(open_job: concurrent.futures.Future, tail: list[bytes]) -> None:
+        # 写线程上、排在建文件之后：建成了就把攒下的记录补上再关 fd；建失败就什么都不做
+        try:
+            fd = open_job.result()
+        except Exception:  # noqa: BLE001 - 建文件失败 / 被取消（concurrent 的 CancelledError 也是 Exception）：没有流水可补
+            return
+        try:
+            for data in tail:
+                _write_all(fd, data)
+        except OSError as exc:
+            # 补录出来的转录会缺这些行：留一条日志，事后查得到
+            logger.warning("visit upload: buffered records not written after an abandoned open: %s",
+                           type(exc).__name__)
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+    def _book(self, *, lp: int, side: str, speaker: str, ts: float, text: str, truncated: bool) -> dict:
+        """Validate one final line and add it to the in-memory copy; returns the record to write."""
         if not self.is_open:
             raise RuntimeError("upload stream is not open")
         if side not in SIDE_RANK or speaker not in SPEAKERS:
@@ -343,8 +420,7 @@ class UploadJournal:
                   "text": str(text), "truncated": bool(truncated)}
         self._records.append(record)
         self._last_ts = float(ts)
-        # 已登记的一行不因调用方被取消而撤回
-        await asyncio.shield(self._submit(self._append_sync, _encode_record(record)))
+        return record
 
     def note_usage(self, delta: Mapping[str, Any], *, ts: float | None = None) -> None:
         """Record a usage delta (positive integers only); a no-op once sealed or never opened.
@@ -396,11 +472,19 @@ class UploadJournal:
         duration = max(0, int(end - start)) if start is not None and end is not None else 0
         return {"duration_s": duration, **self._usage}
 
+    @property
+    def seal_write(self) -> "asyncio.Future | None":
+        """The (single) seal write started by :meth:`seal`, or None before it."""
+        return self._seal_write
+
     async def seal(self, finalized_reason: str, *, ended_at: float | None = None) -> dict | None:
         """Write ``.upload.json`` from memory, then delete the stream; returns the document.
 
-        Idempotent; None when the journal was never opened. Called by
-        finalize (before ``state.json.finalized``) and by the shutdown hook.
+        Idempotent: a call while the seal is being written (or after it was)
+        waits for that same write and returns the same document, so no caller
+        mistakes an unwritten seal for a finished one. None when the journal
+        was never opened. Called by finalize (before ``state.json.finalized``)
+        and by the shutdown hook.
         Nothing is uploaded here: once the runtime is unregistered (``is_live``
         false) the caller must call :func:`schedule_visit_retry`, otherwise a
         report queued during the visit waits for the next start's recovery.
@@ -408,6 +492,9 @@ class UploadJournal:
         the last record still counts toward the duration. Crash recovery,
         which has no finalize time, uses the last record instead.
         """
+        if self._seal_write is not None:
+            # 已经在封存（或封存过）：等同一次写盘，不另起、也不返回 None 冒充「封存完了」
+            return await asyncio.shield(self._seal_write)
         if self._sealed or self._executor is None:
             return None
         doc = build_upload_doc(self._records, visit_id=self.visit_id, finalized_reason=finalized_reason)
@@ -416,9 +503,14 @@ class UploadJournal:
         _stamp_end(doc["request"], time.time() if ended_at is None else ended_at)
         remember_anomalies(self.visit_id, doc["request"].get("anomalies"), doc.get("own_visit_uid"))
         self._sealed = True
+        write = self._seal_write = asyncio.ensure_future(self._write_seal(doc, finalized_reason))
+        write.add_done_callback(lambda t: t.cancelled() or t.exception())  # 调用方都被取消时也取走异常
+        return await asyncio.shield(write)
+
+    async def _write_seal(self, doc: dict, finalized_reason: str) -> dict:
         executor = self._executor
         try:
-            await asyncio.shield(asyncio.wrap_future(executor.submit(self._seal_sync, doc)))
+            await asyncio.wrap_future(executor.submit(self._seal_sync, doc))
         finally:
             self._executor = None
             executor.shutdown(wait=False)

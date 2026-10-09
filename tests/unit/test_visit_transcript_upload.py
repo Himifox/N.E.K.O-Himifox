@@ -130,6 +130,168 @@ async def _recover(tmp_path, monkeypatch, submit=None):
 # ── 流水与封存 ─────────────────────────────────────────────────────────
 
 
+async def test_an_abandoned_open_stops_at_once_when_cancelled(tmp_path, servers):
+    import threading
+
+    journal = tu.UploadJournal(tmp_path, V1)
+    release = threading.Event()
+    real_open = journal._open_sync
+
+    def slow_open(data):
+        release.wait(10)                                      # 建流水时磁盘卡住
+        return real_open(data)
+
+    journal._open_sync = slow_open
+    opening = asyncio.ensure_future(journal.open(role="host", own_visit_uid=OWN, own_char_uid=CHAR_UID,
+                                                 transport="trtc", started_at=1000.0, app_version="1.2"))
+    try:
+        await asyncio.sleep(0.05)
+        journal.abandon_open()                                # 关机
+        opening.cancel()
+        done, _ = await asyncio.wait([opening], timeout=0.5)
+        assert done                                           # 不等卡住的写盘，事件循环不被挂住
+        assert V1 in tu._open_streams                         # 登记留着：上传 worker 不会把写了一半的流水当孤立文件重封
+    finally:
+        release.set()
+        await asyncio.sleep(0.1)
+        tu._open_streams.discard(V1)
+
+
+async def test_an_abandoned_open_still_writes_the_buffered_records_after_the_header(tmp_path, servers):
+    import threading
+
+    journal = tu.UploadJournal(tmp_path, V1)
+    release = threading.Event()
+    real_open = journal._open_sync
+
+    def slow_open(data):
+        release.wait(10)
+        return real_open(data)
+
+    journal._open_sync = slow_open
+    opening = asyncio.ensure_future(journal.open(role="host", own_visit_uid=OWN, own_char_uid=CHAR_UID,
+                                                 transport="trtc", started_at=1000.0, app_version="1.2"))
+    try:
+        await asyncio.sleep(0.05)
+        journal.abandon_open([{"kind": "line", "lp": 1, "side": "host", "from": "own_cat", "ts": 1001.0,
+                               "text": "等上传头时说的", "truncated": False}])
+        opening.cancel()
+        await asyncio.wait([opening], timeout=0.5)
+        release.set()                                         # 写线程这时才建好流水，接着补上攒下的记录
+        stream = _spool(tmp_path) / f"{V1}.upload.jsonl"
+        for _ in range(50):
+            if stream.exists() and "等上传头时说的" in stream.read_text(encoding="utf-8"):
+                break
+            await asyncio.sleep(0.05)
+        rows = [json.loads(line) for line in stream.read_text(encoding="utf-8").splitlines()]
+        assert [r["kind"] for r in rows] == ["header", "line"]   # 先头后行，下次启动补录拿得到
+    finally:
+        release.set()
+        await asyncio.sleep(0.1)
+        tu._open_streams.discard(V1)
+
+
+async def test_an_abandoned_open_stays_registered_until_its_tail_is_written(tmp_path, servers, monkeypatch):
+    import threading
+
+    journal = tu.UploadJournal(tmp_path, V1)
+    release, created, tail_go = threading.Event(), threading.Event(), threading.Event()
+    real_open = journal._open_sync
+    real_write_all = tu._write_all
+
+    def slow_open(data):
+        release.wait(10)
+        fd = real_open(data)
+        created.set()
+        return fd
+
+    def slow_write_all(fd, data):
+        tail_go.wait(10)                                      # 补写卡在写线程里
+        return real_write_all(fd, data)
+
+    journal._open_sync = slow_open
+    opening = asyncio.ensure_future(journal.open(role="host", own_visit_uid=OWN, own_char_uid=CHAR_UID,
+                                                 transport="trtc", started_at=1000.0, app_version="1.2"))
+    try:
+        await asyncio.sleep(0.05)
+        release.set()
+        created.wait(5)                                       # 头已建好，open() 还没恢复
+        monkeypatch.setattr(tu, "_write_all", slow_write_all)
+        journal.abandon_open([{"kind": "anomaly", "ts": 1001.0}])
+        opening.cancel()
+        await asyncio.wait([opening], timeout=1)
+        await asyncio.sleep(0.1)
+        assert V1 in tu._open_streams                         # 补写没完：上传 worker 不能把它当孤立流水重封
+        tail_go.set()
+        for _ in range(100):
+            if V1 not in tu._open_streams:
+                break
+            await asyncio.sleep(0.05)
+        assert V1 not in tu._open_streams                     # 补完、关掉 fd 之后才撤登记
+    finally:
+        release.set()
+        tail_go.set()
+        tu._open_streams.discard(V1)
+
+
+async def test_an_abandoned_open_that_already_finished_keeps_its_header_only_stream(tmp_path, servers):
+    import threading
+
+    journal = tu.UploadJournal(tmp_path, V1)
+    release, created = threading.Event(), threading.Event()
+    real_open = journal._open_sync
+
+    def slow_open(data):
+        release.wait(10)
+        fd = real_open(data)
+        created.set()
+        return fd
+
+    journal._open_sync = slow_open
+    opening = asyncio.ensure_future(journal.open(role="host", own_visit_uid=OWN, own_char_uid=CHAR_UID,
+                                                 transport="trtc", started_at=1000.0, app_version="1.2"))
+    try:
+        await asyncio.sleep(0.05)
+        release.set()
+        created.wait(5)                                       # 建文件刚好已完成，open() 还没恢复
+        journal.abandon_open([])                              # 关机：没有攒下的记录
+        opening.cancel()
+        await asyncio.wait([opening], timeout=1)
+        await asyncio.sleep(0.1)
+        stream = _spool(tmp_path) / f"{V1}.upload.jsonl"
+        assert stream.exists()                                # 只有头也留着：零行转录与用量下次启动照样补录
+    finally:
+        release.set()
+        tu._open_streams.discard(V1)
+
+
+async def test_a_second_seal_while_the_first_is_writing_waits_for_the_same_write(tmp_path, servers):
+    import threading
+
+    journal = await _journal(tmp_path)
+    await _say(journal, 1, "first")
+    release = threading.Event()
+    real_seal = journal._seal_sync
+    writes = []
+
+    def slow_seal(doc):
+        writes.append(doc)
+        release.wait(10)                                      # 写 .upload.json 时磁盘卡住
+        real_seal(doc)
+
+    journal._seal_sync = slow_seal
+    first = asyncio.ensure_future(journal.seal("route_end", ended_at=1002.0))
+    while not writes:
+        await asyncio.sleep(0.01)
+    second = asyncio.ensure_future(journal.seal("shutdown"))  # 关机路径再来一次
+    await asyncio.sleep(0.1)
+    assert not second.done()                                  # 不立即返回 None 冒充「封存完了」
+    release.set()
+    doc = await asyncio.wait_for(first, 5)
+    assert await asyncio.wait_for(second, 5) is doc           # 等的是同一次写盘、同一份文档
+    assert len(writes) == 1 and _sealed(tmp_path) == doc
+
+
 async def test_seal_writes_the_upload_doc_then_deletes_the_stream(tmp_path, servers, monkeypatch):
     journal = await _journal(tmp_path)
     await _say(journal, 2, "second", side="guest", speaker="peer_cat")

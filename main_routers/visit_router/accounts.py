@@ -102,17 +102,27 @@ def _read_sync(path: Path, *, strict: bool = False) -> dict[str, str]:
     }
 
 
+class AccountMapDeferred(OSError):
+    """The map cannot be written right now (unreadable, or a corrupt file not moved aside); retry later."""
+
+
 def _record_sync(path: Path, account: str, visit_uid: str) -> bool:
     with path_lock(path):
         try:
             accounts = _read_sync(path, strict=True)
-        except _MapUnreadable:
-            # 暂时读不了：不拿只有这一个账号的表覆盖它（其余账号的映射会丢），下次拿到凭证再记
-            return False
+        except _MapUnreadable as exc:
+            # 暂时读不了：不拿只有这一个账号的表覆盖它（其余账号的映射会丢）；报给调用方，由它稍后补写。
+            # 带上底层原因：共享冲突这类会自己好，PermissionError / 目录只读会一直失败，排查时要分得清
+            # Windows 上文件被占用（WinError 32）、替换瞬间的冲突与真正的权限拒绝（都可能是 WinError 5）全是
+            # PermissionError：errno / winerror 一并写上帮助排查；是不是一直失败还得看它是否反复出现
+            c = exc.__cause__
+            cause = (f"{type(c).__name__}(errno={getattr(c, 'errno', None)}, winerror={getattr(c, 'winerror', None)})"
+                     if c is not None else "unknown")
+            raise AccountMapDeferred(f"visit accounts map unreadable: {cause}") from exc
         except _MapCorrupt:
-            # 内容坏了、读不出任何映射：原文件改名留底，再从这个账号重新记起
+            # 内容坏了、读不出任何映射：原文件改名留底，再从这个账号重新记起；改名都做不到就报给调用方稍后补写
             if move_aside(path, "corrupt") is None:
-                return False
+                raise AccountMapDeferred("corrupt visit accounts map not moved aside") from None
             accounts = {}
         if accounts.get(account) == visit_uid:
             return False
@@ -133,6 +143,9 @@ async def record_account_visit_uid(account: str, visit_uid: str) -> bool:
 
     Called by the runtime with ``VisitCredentials.account`` / ``.visit_uid``
     after every successful credentials fetch. Bad values are ignored.
+    Raises :class:`AccountMapDeferred` when the map cannot be written right
+    now (False only means it already held this mapping); the runtime keeps
+    retrying in the background.
     """
     if not _valid_account(account) or not isinstance(visit_uid, str) or not VISIT_UID_RE.fullmatch(visit_uid):
         return False
