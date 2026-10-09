@@ -3342,6 +3342,19 @@ html.neko-window-maximized .chat-item + .chat-item::before {
     opacity: 0.72;
 }
 
+#memory-settings-panel .memory-setting-feedback {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+}
+
+#memory-settings-panel .memory-setting-feedback[hidden],
+#memory-settings-panel .memory-setting-feedback [hidden] {
+    display: none;
+}
+
 #memory-settings-panel .review-toggle-control.is-disabled .auto-review-toggle-btn {
     border-color: var(--memory-divider);
     background: var(--memory-surface-subtle);
