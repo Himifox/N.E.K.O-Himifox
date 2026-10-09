@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import builtins
 import json
+import logging
 import os
 import shutil
 import threading
@@ -17,6 +18,7 @@ from main_routers.shared_state import init_shared_state
 from utils.cloudsave_runtime import CLOUDSAVE_DISABLED_ENV, ROOT_MODE_MAINTENANCE_READONLY
 from utils import storage_location_bootstrap as storage_location_bootstrap_module
 from utils.config_manager import ConfigManager
+from utils.config_manager import storage_roots as storage_roots_module
 from utils.storage_layout import resolve_storage_layout
 from utils.storage_migration import (
     create_pending_storage_migration,
@@ -197,12 +199,24 @@ async def test_barrier_rollback_cancellation_is_propagated(tmp_path, monkeypatch
 
 
 @pytest.mark.unit
-def test_corrupt_root_state_remains_logged(tmp_path, caplog):
+def test_corrupt_root_state_remains_logged(tmp_path, caplog, monkeypatch):
     manager = _make_real_config_manager(tmp_path)
     manager.root_state_path.parent.mkdir(parents=True, exist_ok=True)
     manager.root_state_path.write_text("{truncated", encoding="utf-8")
-    with pytest.raises(json.JSONDecodeError):
-        manager.load_root_state()
+    logger = storage_roots_module.logger
+    caplog.clear()
+    # The app logger stops propagation to root, where caplog normally listens.
+    # Capture directly and stop propagation locally to avoid duplicate capture
+    # when the app logger has not been initialized yet.
+    logger.addHandler(caplog.handler)
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(logger, "propagate", False)
+            with caplog.at_level(logging.ERROR, logger=logger.name):
+                with pytest.raises(json.JSONDecodeError):
+                    manager.load_root_state()
+    finally:
+        logger.removeHandler(caplog.handler)
     assert "加载 JSON 文件失败" in caplog.text
     assert "root_state.json" in caplog.text
 
