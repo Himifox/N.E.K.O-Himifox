@@ -6,8 +6,11 @@ from unittest.mock import AsyncMock
 from urllib.parse import quote
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+import httpx
 import pytest
+import pytest_asyncio
 
 from main_routers import vrm_router
 
@@ -35,37 +38,57 @@ def vrm_api(tmp_path, monkeypatch):
     )
     app = FastAPI()
     app.include_router(vrm_router.router)
+    app.mount("/user_vrm", StaticFiles(directory=user_dir))
+    app.mount("/static/vrm", StaticFiles(directory=project_root / "static" / "vrm"))
     with TestClient(app) as client:
         yield client, config
+
+
+@pytest_asyncio.fixture
+async def vrm_async_api(vrm_api):
+    client, config = vrm_api
+    # Starlette 1.3.1 TestClient unquotes HTTPX's already-decoded URL path.
+    # ASGITransport preserves the server's single-decode semantics for literal percent names.
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=client.app), base_url="http://testserver",
+    ) as async_client:
+        yield async_client, config, client.app
 
 
 @pytest.mark.parametrize(
     "model_name",
     ["Avatar", "My Avatar", "Avatar(1)", "Avatar[1]", "猫娘", "猫娘 🐱",
-     "Cafe\u0301", "Avatar.v1_2-test", "Avatar#100%"],
+     "Cafe\u0301", "Avatar.v1_2-test", "Avatar#100%", "a%20b", "a%2Fb"],
 )
 @pytest.mark.parametrize("extension", [".vrm", ".VRM", ".VrM"])
-def test_uploaded_model_emotion_mapping_roundtrip(vrm_api, model_name, extension):
-    client, config = vrm_api
+@pytest.mark.asyncio
+async def test_uploaded_model_emotion_mapping_roundtrip(vrm_async_api, model_name, extension):
+    client, config, _ = vrm_async_api
     filename = f"{model_name}{extension}"
     # Upload routes store opaque bytes; VRM rendering is outside this test.
     content = b"glTF"
-    uploaded = client.post(f"{API}/upload", files={"file": (filename, content)})
+    uploaded = await client.post(f"{API}/upload", files={"file": (filename, content)})
     assert uploaded.status_code == 200
     assert uploaded.json()["model_name"] == model_name
-    models = client.get(f"{API}/models").json()["models"]
+    model_url = uploaded.json()["model_url"]
+    assert model_url == f"/user_vrm/{quote(filename, safe='')}"
+    fetched = await client.get(model_url)
+    assert fetched.status_code == 200
+    assert fetched.content == content
+    models = (await client.get(f"{API}/models")).json()["models"]
     assert any(model["name"] == model_name and model["filename"] == filename
+               and model["url"] == model["path"] == model_url
                for model in models)
 
     url = f"{API}/emotion_mapping/{quote(model_name, safe='')}"
-    loaded = client.get(url)
+    loaded = await client.get(url)
     assert loaded.status_code == 200
     assert loaded.json()["config"] == vrm_router.DEFAULT_MOOD_MAP
     mapping = {"happy": ["custom smile"], "sad": ["custom sadness"]}
-    saved = client.post(url, json=mapping)
+    saved = await client.post(url, json=mapping)
     assert saved.status_code == 200
     assert saved.json()["success"] is True
-    assert client.get(url).json()["config"] == mapping
+    assert (await client.get(url)).json()["config"] == mapping
     config_path = config.project_root / "static" / "vrm" / "configs" / f"{model_name}_emotion.json"
     assert json.loads(config_path.read_text(encoding="utf-8")) == mapping
     assert (config.vrm_dir / filename).read_bytes() == content
@@ -92,8 +115,11 @@ def test_existing_models_with_uppercase_extensions_can_save_mapping(vrm_api, loc
     model_path = directory / filename
     model_path.write_bytes(b"existing model sentinel")
     models = client.get(f"{API}/models").json()["models"]
-    assert any(model["name"] == model_name and model["filename"] == filename
-               for model in models)
+    model = next(model for model in models if model["filename"] == filename)
+    assert model["name"] == model_name
+    fetched = client.get(model["url"])
+    assert fetched.status_code == 200
+    assert fetched.content == b"existing model sentinel"
     url = f"{API}/emotion_mapping/{quote(model_name, safe='')}"
     mapping = {"happy": ["existing model smile"]}
     assert client.post(url, json=mapping).status_code == 200
@@ -104,6 +130,7 @@ def test_existing_models_with_uppercase_extensions_can_save_mapping(vrm_api, loc
 
 @pytest.mark.parametrize("filename", [
     "What?.vrm", "model:stream.vrm", "model*.vrm", "model|stream.vrm", "<model>.vrm", ".vrm",
+    "..vrm", "...vrm",
 ])
 def test_invalid_upload_names_are_rejected_without_writes(vrm_api, filename):
     client, config = vrm_api
@@ -141,7 +168,7 @@ def test_distinct_model_names_keep_separate_mappings(vrm_api, names):
 
 @pytest.mark.parametrize(
     "model_name",
-    ["", "../outside", "folder/model", r"folder\model", "/outside",
+    ["", ".", "..", "../outside", "folder/model", r"folder\model", "/outside",
      r"C:\outside", "C:outside", "model:stream", "model\x00", "model\n",
      "model?", "model*", "<model>", '"model"', "model|stream"],
 )
@@ -160,12 +187,96 @@ def test_missing_model_does_not_create_emotion_mapping(vrm_api):
     assert not (config.project_root / "static" / "vrm" / "configs").exists()
 
 
+@pytest.mark.asyncio
+async def test_encoded_model_urls_do_not_alias_other_filenames(vrm_async_api):
+    client, config, _ = vrm_async_api
+    filenames = {"a b.vrm": b"space sentinel", "a%20b.vrm": b"literal percent sentinel"}
+    for filename, content in filenames.items():
+        assert (await client.post(f"{API}/upload", files={"file": (filename, content)})).status_code == 200
+    models = (await client.get(f"{API}/models")).json()["models"]
+    for model in models:
+        fetched = await client.get(model["url"])
+        assert fetched.status_code == 200
+        assert fetched.content == filenames[model["filename"]]
+    literal_model = next(model for model in models if model["filename"] == "a%20b.vrm")
+    deleted = await client.request("DELETE", f"{API}/model", json={"url": literal_model["url"]})
+    assert deleted.status_code == 200
+    assert not (config.vrm_dir / "a%20b.vrm").exists()
+    assert (config.vrm_dir / "a b.vrm").read_bytes() == b"space sentinel"
+
+
+@pytest.mark.parametrize("filename", ["Avatar.vrm", "My Avatar.vrm", "猫娘 🐱.VRM", "Avatar#100%.vrm", "a%20b.vrm", "a%2Fb.vrm"])
+def test_delete_decodes_model_url_once(vrm_api, filename):
+    client, config = vrm_api
+    target = config.vrm_dir / filename
+    target.write_bytes(b"delete target")
+    other = config.vrm_dir / "Other.vrm"
+    other.write_bytes(b"other sentinel")
+    segment = quote(filename, safe='')
+    response = client.request("DELETE", f"{API}/model", json={"url": f"/user_vrm/{segment}"})
+    assert response.status_code == 200
+    assert not target.exists()
+    assert other.read_bytes() == b"other sentinel"
+
+
+@pytest.mark.parametrize("space_model_exists", [False, True])
+def test_delete_never_falls_back_to_encoded_filename(vrm_api, space_model_exists):
+    client, config = vrm_api
+    literal = config.vrm_dir / "a%20b.vrm"
+    literal.write_bytes(b"literal percent sentinel")
+    space = config.vrm_dir / "a b.vrm"
+    if space_model_exists:
+        space.write_bytes(b"space sentinel")
+    response = client.request("DELETE", f"{API}/model", json={"url": "/user_vrm/a%20b.vrm"})
+    assert response.status_code == (200 if space_model_exists else 404)
+    assert not space.exists()
+    assert literal.read_bytes() == b"literal percent sentinel"
+
+
+@pytest.mark.parametrize("url", [
+    "/user_vrm/../outside.vrm", "/user_vrm/%2e%2e%2foutside.vrm",
+    "/user_vrm/%2e%2e%5coutside.vrm", "/user_vrm/%2foutside.vrm",
+    "/user_vrm/%00.vrm", "/static/vrm/outside.vrm",
+])
+def test_delete_rejects_encoded_path_syntax_without_removing_files(vrm_api, tmp_path, url):
+    client, config = vrm_api
+    outside = tmp_path / "outside.vrm"
+    outside.write_bytes(b"outside sentinel")
+    inside = config.vrm_dir / "Inside.vrm"
+    inside.write_bytes(b"inside sentinel")
+    response = client.request("DELETE", f"{API}/model", json={"url": url})
+    assert response.status_code == 400
+    assert outside.read_bytes() == b"outside sentinel"
+    assert inside.read_bytes() == b"inside sentinel"
+
+
+@pytest.mark.asyncio
+async def test_workshop_model_urls_encode_each_filename_segment(vrm_async_api, tmp_path, monkeypatch):
+    client, _, app = vrm_async_api
+    workshop_root = tmp_path / "workshop"
+    item = workshop_root / "123"
+    subdirectory = item / "Folder#20%"
+    subdirectory.mkdir(parents=True)
+    for directory, filename in [(item, "Avatar#100%.vrm"), (subdirectory, "a%20b.VRM")]:
+        (directory / filename).write_bytes(filename.encode())
+    app.mount("/workshop", StaticFiles(directory=workshop_root))
+    monkeypatch.setattr(vrm_router, "get_subscribed_workshop_items", AsyncMock(return_value={
+        "success": True, "items": [{"installedFolder": str(item), "publishedFileId": "123"}],
+    }))
+    models = (await client.get(f"{API}/models")).json()["models"]
+    assert len(models) == 2
+    for model in models:
+        fetched = await client.get(model["url"])
+        assert fetched.status_code == 200
+        assert fetched.content == model["filename"].encode()
+
+
 @pytest.mark.parametrize("location,extension", [
     ("config", ".vrm"), ("builtin", ".vrm"), ("user", ".vrm"),
     ("builtin", ".VRM"), ("user", ".VRM"),
 ])
 def test_outside_resolved_paths_are_rejected(vrm_api, tmp_path, monkeypatch, location, extension):
-    _, config = vrm_api
+    client, config = vrm_api
     name = "My Avatar(1)"
     static_dir = config.project_root / "static" / "vrm"
     if location == "config":
@@ -190,6 +301,11 @@ def test_outside_resolved_paths_are_rejected(vrm_api, tmp_path, monkeypatch, loc
         assert vrm_router._get_emotion_config_path(name) is None
     else:
         assert vrm_router._get_model_path(name) == (None, "")
+        if location == "user":
+            response = client.request("DELETE", f"{API}/model", json={
+                "url": f"/user_vrm/{quote(candidate.name, safe='')}",
+            })
+            assert response.status_code == 400
     assert candidate.read_bytes() == b"inside sentinel"
     assert outside.read_bytes() == b"outside sentinel"
 

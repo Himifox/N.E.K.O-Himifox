@@ -36,6 +36,38 @@ def read_model_manager_source() -> str:
     )
 
 
+def test_vrm_mapping_uses_original_filename_after_url_encoding():
+    helper_source = Path("static/js/model_manager/path-request-fullscreen.js").read_text(
+        encoding="utf-8"
+    ).split("const RequestHelper", 1)[0]
+    controller = Path("static/js/model_manager/page-controller.js").read_text(encoding="utf-8")
+    marker = "if (vrmManager && vrmManager.expression && modelPath)"
+    mapping_block = marker + controller.split(marker, 1)[1].split("\n                }", 1)[0] + "\n}"
+    script = f"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const context = vm.createContext({{}});
+vm.runInContext({json.dumps(helper_source)}, context);
+const mappingBlock = {json.dumps(mapping_block)};
+for (const [modelPath, filename, expected] of [
+    ['/user_vrm/Avatar%23100%25.vrm', 'Avatar#100%.vrm', 'Avatar#100%'],
+    ['/user_vrm/a%2520b.VRM', 'a%20b.VRM', 'a%20b'],
+    ['/user_vrm/a%252Fb.vrm', null, 'a%2Fb'],
+    ['/user_vrm/My%20Avatar.vrm', null, 'My Avatar'],
+    ['/user_vrm/猫娘.vrm', null, '猫娘'],
+    ['/user_vrm/Avatar100%.vrm', null, 'Avatar100%'],
+]) {{
+    let actual;
+    context.modelPath = modelPath;
+    context.filename = filename;
+    context.vrmManager = {{ expression: {{ loadMoodMap(name) {{ actual = name; }} }} }};
+    vm.runInContext(mappingBlock, context);
+    assert.equal(actual, expected);
+}}
+"""
+    run_model_manager_node(script)
+
+
 def test_vrm_catalog_preview_preserves_selected_idle_and_stops_preview_rotation():
     source = Path("static/js/model_manager/page-controller.js").read_text(
         encoding="utf-8"

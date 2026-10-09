@@ -32,6 +32,7 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -195,7 +196,7 @@ async def _handle_vrm_file_upload(
                 "success": True,
                 "message": f"{file_type_name} {filename} 上传成功",
                 "model_name": model_name,
-                "model_url": f"{VRM_USER_PATH}/{filename}",
+                "model_url": f"{VRM_USER_PATH}/{quote(filename, safe='')}",
                 "file_size": total_size
             })
             
@@ -251,7 +252,7 @@ async def get_vrm_models():
         static_vrm_dir = project_root / "static" / "vrm"
         if static_vrm_dir.exists():
             for vrm_file in _iter_vrm_model_files(static_vrm_dir):
-                url = f"/static/vrm/{vrm_file.name}"
+                url = f"/static/vrm/{quote(vrm_file.name, safe='')}"
                 # 跳过已存在的 URL（避免重复）
                 if url in seen_urls:
                     continue
@@ -272,7 +273,7 @@ async def get_vrm_models():
         vrm_dir = config_mgr.vrm_dir
         if vrm_dir.exists():
             for vrm_file in _iter_vrm_model_files(vrm_dir):
-                url = f"{VRM_USER_PATH}/{vrm_file.name}"
+                url = f"{VRM_USER_PATH}/{quote(vrm_file.name, safe='')}"
                 # 跳过已存在的 URL（避免重复）
                 if url in seen_urls:
                     continue
@@ -301,7 +302,7 @@ async def get_vrm_models():
                         # 检查安装目录下是否有.vrm文件
                         for filename in os.listdir(installed_folder):
                             if filename.lower().endswith('.vrm'):
-                                url = f"/workshop/{item_id}/{filename}"
+                                url = f"/workshop/{item_id}/{quote(filename, safe='')}"
                                 if url in seen_urls:
                                     continue
                                 seen_urls.add(url)
@@ -323,7 +324,7 @@ async def get_vrm_models():
                             if os.path.isdir(subdir_path):
                                 for filename in os.listdir(subdir_path):
                                     if filename.lower().endswith('.vrm'):
-                                        url = f"/workshop/{item_id}/{subdir}/{filename}"
+                                        url = f"/workshop/{item_id}/{quote(subdir, safe='')}/{quote(filename, safe='')}"
                                         if url in seen_urls:
                                             continue
                                         seen_urls.add(url)
@@ -517,20 +518,19 @@ async def delete_vrm_model(request: Request):
             return JSONResponse(status_code=400, content={"success": False, "error": "只能删除用户导入的 VRM 模型"})
 
         rel = url[len(VRM_USER_PATH) + 1:]  # 去掉 '/user_vrm/'
-        if not rel or '..' in rel or rel.startswith('/'):
-            return JSONResponse(status_code=400, content={"success": False, "error": "无效的模型路径"})
-
-        # 只允许删除顶层 .vrm 文件
-        if Path(rel).name != rel or not rel.lower().endswith('.vrm'):
-            return JSONResponse(status_code=400, content={"success": False, "error": "无效的模型路径"})
-
         config_mgr = get_config_manager()
         vrm_dir = config_mgr.vrm_dir
-        target = (vrm_dir / rel).resolve()
-
+        # URL 路径只解码一次，不能再用编码后的文本猜测另一个文件名。
+        try:
+            filename = unquote(rel, errors='strict')
+        except UnicodeDecodeError:
+            return JSONResponse(status_code=400, content={"success": False, "error": "无效的模型路径"})
+        if ('..' in filename or not filename.lower().endswith('.vrm')
+                or not _is_valid_vrm_model_name(filename[:-4])):
+            return JSONResponse(status_code=400, content={"success": False, "error": "无效的模型路径"})
+        target = (vrm_dir / filename).resolve()
         if not target.is_relative_to(vrm_dir.resolve()):
             return JSONResponse(status_code=400, content={"success": False, "error": "路径越界"})
-
         if not target.is_file():
             return JSONResponse(status_code=404, content={"success": False, "error": "模型文件不存在"})
 
@@ -573,7 +573,7 @@ DEFAULT_MOOD_MAP = {
 def _is_valid_vrm_model_name(model_name: str) -> bool:
     """Preserve filename stems while rejecting path syntax and reserved characters."""
     # 保留上传时的原始名称；禁止路径分隔符、控制字符和 Windows 保留字符。
-    return bool(model_name) and re.search(r'[<>:"/\\|?*\x00-\x1f]', model_name) is None
+    return model_name not in {'', '.', '..'} and re.search(r'[<>:"/\\|?*\x00-\x1f]', model_name) is None
 
 
 def _get_emotion_config_path(model_name: str) -> Path | None:

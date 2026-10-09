@@ -3588,7 +3588,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 加载模型特定的情感映射配置
                 if (vrmManager && vrmManager.expression && modelPath) {
                     // 从模型路径提取模型名称
-                    const modelName = modelPath.split('/').pop().replace(/\.vrm$/i, '');
+                    const modelName = ModelPathHelper.getVrmModelName(modelPath, filename);
                     vrmManager.expression.loadMoodMap(modelName);
                 }
 
