@@ -2955,11 +2955,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                         return;
                     }
 
-                    // 使用 ModelPathHelper 确保 data-path 属性永远是有效的 URL
+                    // URL is for loading; data-path preserves the raw configuration reference.
                     const validPath = ModelPathHelper.normalizeModelPath(modelPath, 'model');
 
                     option.value = validPath;
-                    option.setAttribute('data-path', validPath);
+                    option.setAttribute('data-path', ModelPathHelper.normalizeModelPath(model.path || modelPath, 'model'));
                     if (filename) {
                         option.setAttribute('data-filename', filename);
                     }
@@ -4554,7 +4554,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 const option = document.createElement('option');
                 option.value = validPath;
-                option.setAttribute('data-path', validPath);
+                option.setAttribute('data-path', ModelPathHelper.normalizeModelPath(model.path || modelPath, 'model'));
                 option.setAttribute('data-sub-type', 'vrm');
                 if (filename) option.setAttribute('data-filename', filename);
                 if (model.item_id) option.dataset.itemId = model.item_id;

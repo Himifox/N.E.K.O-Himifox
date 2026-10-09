@@ -68,6 +68,99 @@ for (const [modelPath, filename, expected] of [
     run_model_manager_node(script)
 
 
+def test_vrm_selectors_keep_raw_config_paths_separate_from_fetch_urls():
+    helper = Path('static/js/model_manager/path-request-fullscreen.js').read_text(encoding='utf-8').split('const RequestHelper', 1)[0]
+    controller = Path('static/js/model_manager/page-controller.js').read_text(encoding='utf-8')
+    loaders = [
+        'async function loadVRMModels' + controller.split('async function loadVRMModels', 1)[1].split('// 更新VRM模型下拉菜单', 1)[0],
+        'async function loadLive3DModels' + controller.split('async function loadLive3DModels', 1)[1].split('// 自动选择默认 Live3D 模型', 1)[0],
+    ]
+    save_block = controller.split('// VRM 子类型：转换 VRM 路径', 1)[1].split('\n', 1)[1].split('if (vrmAnimationSelect)', 1)[0]
+    script = f"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const filenames = ['My Avatar.vrm', '猫娘.vrm', 'Avatar#100%.vrm', 'a b.vrm', 'a%20b.vrm', 'a%2Fb.VRM'];
+const models = filenames.map(filename => ({{ filename, path: '/user_vrm/' + filename, url: '/user_vrm/' + encodeURIComponent(filename) }}));
+function element() {{ return {{ dataset: {{}}, attributes: {{}}, setAttribute(k, v) {{ this.attributes[k] = v; }}, getAttribute(k) {{ return this.attributes[k]; }} }}; }}
+(async () => {{
+for (const loader of {json.dumps(loaders)}) {{
+    const options = [];
+    const context = vm.createContext({{
+        document: {{ createElement: element }},
+        vrmModelSelect: {{ appendChild(option) {{ options.push(option); }} }},
+        vrmModelSelectBtn: null, mmdModelSelect: null,
+        RequestHelper: {{ async fetchJson(url) {{ return {{ success: true, models: url.includes('/vrm/') ? models : [] }}; }} }},
+        t: (_, fallback) => fallback, showStatus() {{}}, updateVRMModelDropdown() {{}}, updateVRMModelSelectButtonText() {{}}, console,
+    }});
+    vm.runInContext({json.dumps(helper)} + loader, context);
+    await vm.runInContext(loader.includes('loadLive3DModels') ? 'loadLive3DModels()' : 'loadVRMModels()', context);
+    assert.equal(options.length, models.length);
+    options.forEach((option, i) => {{
+        assert.equal(option.value, models[i].url);
+        assert.equal(option.getAttribute('data-path'), models[i].path);
+        context.selectedOpt = option; context.modelData = {{}}; context.modelName = option.value; context.currentModelInfo = null;
+        vm.runInContext('{{' + {json.dumps(save_block)} + '}}', context);
+        assert.equal(context.modelData.vrm, models[i].path);
+    }});
+}}
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+"""
+    run_model_manager_node(script)
+
+
+def test_vrm_preferences_match_raw_paths_without_aliasing_percent_names():
+    source = Path('static/vrm/vrm-core.js').read_text(encoding='utf-8')
+    path_method = source.split('class VRMCore {', 1)[1].split('constructor(', 1)[0]
+    matching = 'const normalizePath =' + source.split('const normalizePath =', 1)[1].split('\n                }\n                } catch', 1)[0]
+    preference_object = 'const preferences = {' + source.split('const preferences = {', 1)[1].split('\n            };', 1)[0] + '\n}; preferences;'
+    script = f"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const context = vm.createContext({{ window: {{}}, position: {{x: 0, y: 0, z: 0}}, scale: {{x: 1, y: 1, z: 1}} }});
+vm.runInContext('class VRMCore {{' + {json.dumps(path_method)} + '}}', context);
+for (const filename of ['My Avatar.vrm', '猫娘.vrm', 'Avatar#100%.vrm', 'a b.vrm', 'a%20b.vrm', 'a%2Fb.vrm']) {{
+    const raw = '/user_vrm/' + filename;
+    context.modelUrl = '/user_vrm/' + encodeURIComponent(filename);
+    const expected = {{ model_path: raw }};
+    context.modelsArray = [{{model_path: '/user_vrm/a%20b.vrm'}}, {{model_path: '/user_vrm/a b.vrm'}}, expected];
+    if (filename === 'a b.vrm') context.modelsArray[1] = expected;
+    if (filename === 'a%20b.vrm') context.modelsArray[0] = expected;
+    vm.runInContext('{{' + {json.dumps(matching)} + '}}', context);
+    assert.equal(context.preferences, expected);
+    context.modelPath = context.modelUrl;
+    const saved = vm.runInContext('{{' + {json.dumps(preference_object)} + '}}', context);
+    assert.equal(saved.model_path, raw);
+}}
+"""
+    run_model_manager_node(script)
+
+
+def test_vrm_emotion_selector_has_one_entry_per_shared_stem():
+    source = Path('static/js/vrm_emotion_manager.js').read_text(encoding='utf-8')
+    loader = 'async function loadModelList' + source.split('async function loadModelList', 1)[1].split('// 从下拉框选择模型', 1)[0]
+    script = f"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const options = [], items = [];
+const models = [{{name: 'Avatar', filename: 'Avatar.vrm'}}, {{name: 'Avatar', filename: 'Avatar.VRM'}}, {{name: 'Other', filename: 'Other.vrm'}}];
+const context = vm.createContext({{
+    fetch: async () => ({{ok: true, json: async () => ({{success: true, models}})}}),
+    document: {{createElement: () => ({{dataset: {{}}, setAttribute() {{}}, addEventListener() {{}}}})}},
+    modelSelect: {{appendChild(option) {{ options.push(option); }}}}, modelSingleselectOptions: {{appendChild(item) {{ items.push(item); }}}},
+    modelSingleselectText: {{}}, t: (_, fallback) => fallback, console,
+    showStatus(message) {{ throw Error(message); }},
+}});
+vm.runInContext({json.dumps(loader)}, context);
+(async () => {{
+    await vm.runInContext('loadModelList()', context);
+    assert.deepEqual(options.map(o => o.value), ['Avatar', 'Other']);
+    assert.equal(JSON.parse(options[0].dataset.info).filename, 'Avatar.vrm');
+    assert.equal(items.length, 2);
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+"""
+    run_model_manager_node(script)
+
+
 def test_vrm_catalog_preview_preserves_selected_idle_and_stops_preview_rotation():
     source = Path("static/js/model_manager/page-controller.js").read_text(
         encoding="utf-8"

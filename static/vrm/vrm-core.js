@@ -24,6 +24,16 @@ if (!window.VRM_DEFAULT_LIGHTING) {
 }
 
 class VRMCore {
+    static preferencePathFromUrl(modelUrl) {
+        const path = modelUrl.replace(/^https?:\/\/[^/]+/, '');
+        if (!/^\/(?:user_vrm|static\/vrm|workshop)\//.test(path)) return modelUrl;
+        try {
+            return decodeURIComponent(path);
+        } catch (_) {
+            return path;
+        }
+    }
+
     constructor(manager) {
         this.manager = manager;
         this.vrmVersion = null;
@@ -959,14 +969,15 @@ class VRMCore {
                         return parts.length > 0 ? parts[parts.length - 1].toLowerCase() : '';
                     });
                     
-                    const normalizedModelUrl = normalizePath(modelUrl);
-                    const modelFilename = getFilename(modelUrl);
+                    const modelPreferencePath = VRMCore.preferencePathFromUrl(modelUrl);
+                    const normalizedModelUrl = normalizePath(modelPreferencePath);
+                    const modelFilename = getFilename(modelPreferencePath);
                     
                     preferences = modelsArray.find(pref => {
                         if (!pref || !pref.model_path) return false;
                         const prefPath = pref.model_path;
                         
-                        if (prefPath === modelUrl) return true;
+                        if (prefPath === modelPreferencePath) return true;
                         
                         const normalizedPrefPath = normalizePath(prefPath);
                         if (normalizedPrefPath && normalizedPrefPath === normalizedModelUrl) return true;
@@ -1462,7 +1473,7 @@ class VRMCore {
             }
 
             const preferences = {
-                model_path: modelPath,
+                model_path: VRMCore.preferencePathFromUrl(modelPath),
                 position: { x: position.x, y: position.y, z: position.z },
                 scale: { x: scale.x, y: scale.y, z: scale.z }
             };

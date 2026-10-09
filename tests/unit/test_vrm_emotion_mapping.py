@@ -13,6 +13,9 @@ import pytest
 import pytest_asyncio
 
 from main_routers import vrm_router
+from main_routers.characters_router import live2d_models
+from main_routers.config_router.page_config import _resolve_vrm_path
+from utils.config_manager import get_reserved
 
 
 pytestmark = pytest.mark.unit
@@ -29,8 +32,12 @@ def vrm_api(tmp_path, monkeypatch):
         project_root=project_root,
         vrm_dir=user_dir,
         ensure_vrm_directory=lambda: True,
+        aload_characters=AsyncMock(return_value={"猫娘": {"Test": {}}}),
+        asave_characters=AsyncMock(),
     )
     monkeypatch.setattr(vrm_router, "get_config_manager", lambda: config)
+    monkeypatch.setattr(live2d_models, "get_config_manager", lambda: config)
+    monkeypatch.setattr(live2d_models, "get_init_one_catgirl", lambda: AsyncMock())
     monkeypatch.setattr(
         vrm_router,
         "get_subscribed_workshop_items",
@@ -38,6 +45,7 @@ def vrm_api(tmp_path, monkeypatch):
     )
     app = FastAPI()
     app.include_router(vrm_router.router)
+    app.include_router(live2d_models.router)
     app.mount("/user_vrm", StaticFiles(directory=user_dir))
     app.mount("/static/vrm", StaticFiles(directory=project_root / "static" / "vrm"))
     with TestClient(app) as client:
@@ -77,8 +85,19 @@ async def test_uploaded_model_emotion_mapping_roundtrip(vrm_async_api, model_nam
     assert fetched.content == content
     models = (await client.get(f"{API}/models")).json()["models"]
     assert any(model["name"] == model_name and model["filename"] == filename
-               and model["url"] == model["path"] == model_url
+               and model["url"] == model_url and model["path"] == f"/user_vrm/{filename}"
                for model in models)
+    model = next(model for model in models if model["filename"] == filename)
+    saved_character = await client.put('/api/characters/catgirl/l2d/Test', json={
+        'model_type': 'live3d', 'vrm': model['path'], 'apply_runtime': False,
+    })
+    assert saved_character.status_code == 200
+    characters = config.asave_characters.call_args.args[0]
+    persisted = get_reserved(characters['猫娘']['Test'], 'avatar', 'vrm', 'model_path')
+    assert persisted == model['path']
+    resolved_url = _resolve_vrm_path(persisted, config, 'Test')
+    assert resolved_url == model_url
+    assert (await client.get(resolved_url)).content == content
 
     url = f"{API}/emotion_mapping/{quote(model_name, safe='')}"
     loaded = await client.get(url)
@@ -185,6 +204,97 @@ def test_missing_model_does_not_create_emotion_mapping(vrm_api):
     response = client.post(f"{API}/emotion_mapping/Missing%20Avatar", json={"happy": ["smile"]})
     assert response.status_code == 404
     assert not (config.project_root / "static" / "vrm" / "configs").exists()
+
+
+@pytest.mark.parametrize('extension', ['.VRM', '.VrM'])
+@pytest.mark.parametrize('location', ['user', 'builtin'])
+def test_upload_rejects_same_stem_without_changing_existing_file(vrm_api, extension, location):
+    client, config = vrm_api
+    directory = config.vrm_dir if location == 'user' else config.project_root / 'static' / 'vrm'
+    original = directory / 'Avatar.vrm'
+    original.write_bytes(b'original model')
+    result = client.post(f'{API}/upload', files={'file': (f'Avatar{extension}', b'new model')})
+    assert result.status_code == 400
+    assert original.read_bytes() == b'original model'
+    assert {p.name for p in directory.iterdir()} == {'Avatar.vrm'}
+    if location == 'builtin':
+        assert not list(config.vrm_dir.iterdir())
+
+
+@pytest.mark.parametrize('extension', ['.vrm', '.VRM', '.VrM'])
+@pytest.mark.parametrize('by_url', [False, True])
+def test_deleting_user_model_preserves_builtin_shared_mapping(vrm_api, extension, by_url):
+    client, config = vrm_api
+    builtin = config.project_root / 'static' / 'vrm' / f'Avatar{extension}'
+    builtin.write_bytes(b'builtin model')
+    user = config.vrm_dir / 'Avatar.vrm'
+    user.write_bytes(b'user model')
+    mapping = {'happy': ['shared smile']}
+    assert client.post(f'{API}/emotion_mapping/Avatar', json=mapping).status_code == 200
+    deleted = (client.request('DELETE', f'{API}/model', json={'url': '/user_vrm/Avatar.vrm'})
+               if by_url else client.delete(f'{API}/model/Avatar'))
+    assert deleted.status_code == 200
+    assert not user.exists()
+    assert builtin.read_bytes() == b'builtin model'
+    assert client.get(f'{API}/emotion_mapping/Avatar').json()['config'] == mapping
+
+
+@pytest.mark.parametrize('by_url', [False, True])
+def test_deleting_last_uppercase_model_removes_mapping(vrm_api, by_url):
+    client, config = vrm_api
+    model = config.vrm_dir / 'Avatar.VRM'
+    model.write_bytes(b'model')
+    assert client.post(f'{API}/emotion_mapping/Avatar', json={'happy': ['smile']}).status_code == 200
+    deleted = (client.request('DELETE', f'{API}/model', json={'url': '/user_vrm/Avatar.VRM'})
+               if by_url else client.delete(f'{API}/model/Avatar'))
+    assert deleted.status_code == 200
+    assert not model.exists()
+    assert not (config.project_root / 'static' / 'vrm' / 'configs' / 'Avatar_emotion.json').exists()
+
+
+def test_existing_same_stem_files_remain_listed_in_mapping_precedence(vrm_api):
+    client, config = vrm_api
+    upper = config.vrm_dir / 'Avatar.VRM'
+    lower = config.vrm_dir / 'Avatar.vrm'
+    upper.write_bytes(b'upper sentinel')
+    lower.write_bytes(b'lower sentinel')
+    if upper.read_bytes() != b'upper sentinel':
+        pytest.skip('Requires a case-sensitive filesystem')
+    models = client.get(f'{API}/models').json()['models']
+    assert [m['filename'] for m in models] == ['Avatar.vrm', 'Avatar.VRM']
+    assert vrm_router._get_model_path('Avatar')[0] == lower.resolve()
+    mapping = {'happy': ['shared smile']}
+    assert client.post(f'{API}/emotion_mapping/Avatar', json=mapping).status_code == 200
+    assert client.delete(f'{API}/model/Avatar').status_code == 200
+    assert upper.read_bytes() == b'upper sentinel'
+    assert client.get(f'{API}/emotion_mapping/Avatar').json()['config'] == mapping
+
+
+@pytest.mark.parametrize('location', ['builtin', 'user'])
+@pytest.mark.parametrize('filename', ['My Avatar.vrm', '猫娘.VRM', 'a b.vrm', 'a%20b.vrm', 'Avatar#100%.vrm'])
+def test_existing_raw_config_paths_produce_encoded_fetch_urls(vrm_api, location, filename):
+    client, config = vrm_api
+    directory = config.vrm_dir if location == 'user' else config.project_root / 'static' / 'vrm'
+    prefix = '/user_vrm' if location == 'user' else '/static/vrm'
+    (directory / filename).write_bytes(b'existing model')
+    for reference in [f'{prefix}/{filename}', filename]:
+        url = _resolve_vrm_path(reference, config, 'Test')
+        assert url == f'{prefix}/{quote(filename, safe="")}'
+    assert _resolve_vrm_path('https://example.com/a%20b.vrm', config, 'Test') == 'https://example.com/a%20b.vrm'
+
+
+def test_delete_preserves_mapping_when_remaining_models_cannot_be_checked(vrm_api, monkeypatch):
+    client, config = vrm_api
+    (config.vrm_dir / 'Avatar.vrm').write_bytes(b'model')
+    assert client.post(f'{API}/emotion_mapping/Avatar', json={'happy': ['smile']}).status_code == 200
+
+    def inaccessible(directory):
+        raise PermissionError('directory unavailable')
+
+    monkeypatch.setattr(vrm_router, '_iter_vrm_model_files', inaccessible)
+    # URL deletion resolves an exact file independently of the mapping lookup.
+    assert client.request('DELETE', f'{API}/model', json={'url': '/user_vrm/Avatar.vrm'}).status_code == 200
+    assert client.get(f'{API}/emotion_mapping/Avatar').json()['config'] == {'happy': ['smile']}
 
 
 @pytest.mark.asyncio
