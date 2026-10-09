@@ -25,7 +25,12 @@ if (!window.VRM_DEFAULT_LIGHTING) {
 
 class VRMCore {
     static preferencePathFromUrl(modelUrl) {
-        const path = modelUrl.replace(/^https?:\/\/[^/]+/, '');
+        let path = modelUrl;
+        if (/^https?:\/\//.test(modelUrl)) {
+            const url = new URL(modelUrl);
+            if (url.origin !== window.location?.origin) return modelUrl;
+            path = url.pathname;
+        }
         if (!/^\/(?:user_vrm|static\/vrm|workshop)\//.test(path)) return modelUrl;
         try {
             return decodeURIComponent(path);

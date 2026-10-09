@@ -208,24 +208,26 @@ def test_missing_model_does_not_create_emotion_mapping(vrm_api):
 
 @pytest.mark.parametrize('extension', ['.VRM', '.VrM'])
 @pytest.mark.parametrize('location', ['user', 'builtin'])
-def test_upload_rejects_same_stem_without_changing_existing_file(vrm_api, extension, location):
+@pytest.mark.parametrize('existing_name', ['Avatar', 'avatar'])
+def test_upload_rejects_same_stem_without_changing_existing_file(vrm_api, extension, location, existing_name):
     client, config = vrm_api
     directory = config.vrm_dir if location == 'user' else config.project_root / 'static' / 'vrm'
-    original = directory / 'Avatar.vrm'
+    original = directory / f'{existing_name}.vrm'
     original.write_bytes(b'original model')
     result = client.post(f'{API}/upload', files={'file': (f'Avatar{extension}', b'new model')})
     assert result.status_code == 400
     assert original.read_bytes() == b'original model'
-    assert {p.name for p in directory.iterdir()} == {'Avatar.vrm'}
+    assert {p.name for p in directory.iterdir()} == {f'{existing_name}.vrm'}
     if location == 'builtin':
         assert not list(config.vrm_dir.iterdir())
 
 
 @pytest.mark.parametrize('extension', ['.vrm', '.VRM', '.VrM'])
+@pytest.mark.parametrize('builtin_name', ['Avatar', 'avatar'])
 @pytest.mark.parametrize('by_url', [False, True])
-def test_deleting_user_model_preserves_builtin_shared_mapping(vrm_api, extension, by_url):
+def test_deleting_user_model_preserves_builtin_shared_mapping(vrm_api, extension, builtin_name, by_url):
     client, config = vrm_api
-    builtin = config.project_root / 'static' / 'vrm' / f'Avatar{extension}'
+    builtin = config.project_root / 'static' / 'vrm' / f'{builtin_name}{extension}'
     builtin.write_bytes(b'builtin model')
     user = config.vrm_dir / 'Avatar.vrm'
     user.write_bytes(b'user model')
@@ -281,6 +283,8 @@ def test_existing_raw_config_paths_produce_encoded_fetch_urls(vrm_api, location,
         url = _resolve_vrm_path(reference, config, 'Test')
         assert url == f'{prefix}/{quote(filename, safe="")}'
     assert _resolve_vrm_path('https://example.com/a%20b.vrm', config, 'Test') == 'https://example.com/a%20b.vrm'
+    custom_url = '/api/models/current.vrm?token=abc#part'
+    assert _resolve_vrm_path(custom_url, config, 'Test') == custom_url
 
 
 def test_delete_preserves_mapping_when_remaining_models_cannot_be_checked(vrm_api, monkeypatch):
@@ -315,7 +319,7 @@ async def test_encoded_model_urls_do_not_alias_other_filenames(vrm_async_api):
     assert (config.vrm_dir / "a b.vrm").read_bytes() == b"space sentinel"
 
 
-@pytest.mark.parametrize("filename", ["Avatar.vrm", "My Avatar.vrm", "猫娘 🐱.VRM", "Avatar#100%.vrm", "a%20b.vrm", "a%2Fb.vrm"])
+@pytest.mark.parametrize("filename", ["Avatar.vrm", "v1..2.vrm", "My Avatar.vrm", "猫娘 🐱.VRM", "Avatar#100%.vrm", "a%20b.vrm", "a%2Fb.vrm"])
 def test_delete_decodes_model_url_once(vrm_api, filename):
     client, config = vrm_api
     target = config.vrm_dir / filename

@@ -121,7 +121,8 @@ def _resolve_vrm_path(vrm_path: str, _config_manager, target_name: str) -> str:
             _fname = vrm_path[len(VRM_STATIC_PATH) + 1:]
             _vrm_file_verified = (_config_manager.project_root / 'static' / 'vrm' / _fname).exists()
         else:
-            _vrm_file_verified = True
+            # Custom routes are URLs already, including query/fragment syntax.
+            return vrm_path
         if _vrm_file_verified:
             logger.debug(f"获取页面配置 - 角色: {target_name}, VRM模型绝对路径: {vrm_path}")
             return urllib.parse.quote(vrm_path, safe='/')

@@ -122,8 +122,7 @@ async def _handle_vrm_file_upload(
                     "error": f"无效的模型名称: {model_name!r}"
                 })
             builtin_dir = get_config_manager().project_root / 'static' / 'vrm'
-            if any(path.stem == model_name for directory in (builtin_dir, target_dir)
-                   for path in _iter_vrm_model_files(directory)):
+            if _vrm_model_stem_exists(model_name, (builtin_dir, target_dir)):
                 return JSONResponse(status_code=400, content={
                     "success": False,
                     "error": f"{file_type_name} {filename} 已存在，请先删除或重命名现有模型"
@@ -533,7 +532,7 @@ async def delete_vrm_model(request: Request):
             filename = unquote(rel, errors='strict')
         except UnicodeDecodeError:
             return JSONResponse(status_code=400, content={"success": False, "error": "无效的模型路径"})
-        if ('..' in filename or not filename.lower().endswith('.vrm')
+        if (not filename.lower().endswith('.vrm')
                 or not _is_valid_vrm_model_name(filename[:-4])):
             return JSONResponse(status_code=400, content={"success": False, "error": "无效的模型路径"})
         target = (vrm_dir / filename).resolve()
@@ -637,10 +636,11 @@ def _get_model_path(model_name: str) -> tuple[Path | None, str]:
 
 def _find_vrm_model_file(vrm_dir: Path, model_name: str) -> Path | None:
     canonical_path = vrm_dir / f"{model_name}.vrm"
-    candidates = [canonical_path]
-    candidates.extend(path for path in _iter_vrm_model_files(vrm_dir)
-                      if path.stem == model_name and path != canonical_path)
-    for candidate in candidates:
+    def candidates():
+        yield canonical_path
+        yield from (path for path in _iter_vrm_model_files(vrm_dir)
+                    if path.stem == model_name and path != canonical_path)
+    for candidate in candidates():
         resolved = candidate.resolve()
         if not resolved.is_relative_to(vrm_dir.resolve()):
             logger.warning(f"路径穿越尝试被阻止: {model_name!r}")
@@ -650,18 +650,23 @@ def _find_vrm_model_file(vrm_dir: Path, model_name: str) -> Path | None:
     return None
 
 
+def _vrm_model_stem_exists(model_name: str, directories) -> bool:
+    # Conservatively protect mappings shared on case-insensitive filesystems.
+    return any(path.stem.casefold() == model_name.casefold()
+               for directory in directories for path in _iter_vrm_model_files(directory))
+
+
 def _cleanup_vrm_emotion_mapping(model_name: str):
     # Built-in/user models and case-variant extensions intentionally share a mapping.
     try:
         config_mgr = get_config_manager()
         directories = (config_mgr.project_root / 'static' / 'vrm', config_mgr.vrm_dir)
-        if any(path.stem == model_name for directory in directories
-               for path in _iter_vrm_model_files(directory)):
+        if _vrm_model_stem_exists(model_name, directories):
             return
         emotion_config = _get_emotion_config_path(model_name)
         if emotion_config and emotion_config.is_file():
             emotion_config.unlink()
-    except OSError as e:
+    except Exception as e:
         logger.warning(f"删除情感映射配置失败: {e}")
 
 

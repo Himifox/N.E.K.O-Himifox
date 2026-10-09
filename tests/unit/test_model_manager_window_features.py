@@ -15,6 +15,30 @@ def run_model_manager_node(script: str) -> None:
     run_node_script(node, script, check=True)
 
 
+def test_raw_vrm_config_callers_encode_local_paths_once():
+    character = Path("static/app/app-character.js").read_text(encoding="utf-8")
+    start = character.index("if (/^\\/(?:user_vrm")
+    encode_character = character[start:character.index("// 加载 VRM 模型", start)]
+    init = Path("static/vrm/vrm-init.js").read_text(encoding="utf-8")
+    start = init.index("const convertedPath =")
+    encode_init = init[start:init.index("// 7.", start)]
+    run_model_manager_node(f"""
+const assert = require('node:assert/strict');
+for (const raw of ['/user_vrm/猫娘 #100%.VRM', '/user_vrm/a%20b.vrm', 'https://example.com/a%20b.vrm', '/api/models/current.vrm?token=abc#part']) {{
+    const expected = raw.startsWith('/user_vrm/') ? raw.split('/').map(encodeURIComponent).join('/') : raw;
+    let modelUrl = raw;
+    {encode_character}
+    assert.equal(modelUrl, expected);
+    const window = {{convertVRMModelPath: value => value}};
+    const newModelPath = raw;
+    {{
+        {encode_init}
+        assert.equal(modelUrl, expected);
+    }}
+}}
+""")
+
+
 MODEL_MANAGER_PART_NAMES = (
     "named-window-registration.js",
     "runtime-loaders.js",
@@ -116,8 +140,10 @@ def test_vrm_preferences_match_raw_paths_without_aliasing_percent_names():
     script = f"""
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const context = vm.createContext({{ window: {{}}, position: {{x: 0, y: 0, z: 0}}, scale: {{x: 1, y: 1, z: 1}} }});
+const context = vm.createContext({{ URL, window: {{location: {{origin: 'http://localhost'}}}}, position: {{x: 0, y: 0, z: 0}}, scale: {{x: 1, y: 1, z: 1}} }});
 vm.runInContext('class VRMCore {{' + {json.dumps(path_method)} + '}}', context);
+assert.equal(vm.runInContext("VRMCore.preferencePathFromUrl('https://external.example/user_vrm/a%20b.vrm')", context), 'https://external.example/user_vrm/a%20b.vrm');
+assert.equal(vm.runInContext("VRMCore.preferencePathFromUrl('http://localhost/user_vrm/a%20b.vrm')", context), '/user_vrm/a b.vrm');
 for (const filename of ['My Avatar.vrm', '猫娘.vrm', 'Avatar#100%.vrm', 'a b.vrm', 'a%20b.vrm', 'a%2Fb.vrm']) {{
     const raw = '/user_vrm/' + filename;
     context.modelUrl = '/user_vrm/' + encodeURIComponent(filename);

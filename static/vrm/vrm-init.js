@@ -841,7 +841,9 @@ window.checkAndLoadVRM = async function () {
         }
 
         // 6. 使用统一的路径转换工具函数
-        const modelUrl = window.convertVRMModelPath(newModelPath);
+        const convertedPath = window.convertVRMModelPath(newModelPath);
+        const modelUrl = /^\/(?:user_vrm|static\/vrm|workshop)\//.test(convertedPath)
+            ? convertedPath.split('/').map(encodeURIComponent).join('/') : convertedPath;
 
         // 7. 初始化Three.js场景，传入光照配置（如果存在）
         if (!window.vrmManager._isInitialized || !window.vrmManager.scene || !window.vrmManager.camera || !window.vrmManager.renderer) {
