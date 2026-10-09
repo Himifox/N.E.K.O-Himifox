@@ -22,6 +22,9 @@ def test_raw_vrm_config_callers_encode_local_paths_once():
     init = Path("static/vrm/vrm-init.js").read_text(encoding="utf-8")
     start = init.index("const convertedPath =")
     encode_init = init[start:init.index("// 7.", start)]
+    preview = Path("static/js/character_card_manager/model-previews.js").read_text(encoding="utf-8")
+    start = preview.index("const modelUrl = /^")
+    encode_preview = preview[start:preview.index("const result = await localVrmManager.loadModel", start)]
     run_model_manager_node(f"""
 const assert = require('node:assert/strict');
 for (const raw of ['/user_vrm/猫娘 #100%.VRM', '/user_vrm/a%20b.vrm', 'https://example.com/a%20b.vrm', '/api/models/current.vrm?token=abc#part']) {{
@@ -33,6 +36,11 @@ for (const raw of ['/user_vrm/猫娘 #100%.VRM', '/user_vrm/a%20b.vrm', 'https:/
     const newModelPath = raw;
     {{
         {encode_init}
+        assert.equal(modelUrl, expected);
+    }}
+    {{
+        const modelPath = raw;
+        {encode_preview}
         assert.equal(modelUrl, expected);
     }}
 }}
@@ -70,8 +78,10 @@ def test_live3d_switch_selects_exact_raw_vrm_path_before_filename_fallback():
     source = Path("static/js/model_manager/page-controller.js").read_text(encoding="utf-8")
     start = source.index("const tryMatchVrm = () =>")
     matching = source[start:source.index("if (activeSubType === 'mmd')", start)]
+    helpers = Path("static/js/model_manager/path-request-fullscreen.js").read_text(encoding="utf-8").split("const RequestHelper", 1)[0]
     run_model_manager_node(f"""
 const assert = require('node:assert/strict');
+{helpers}
 const name = '猫娘 Avatar.vrm';
 const _vrmPathSwitch = '/user_vrm/' + name;
 const option = prefix => ({{value: prefix + encodeURIComponent(name), getAttribute: key =>
@@ -83,6 +93,14 @@ const dispatchModelManagerChange = () => {{changed++;}};
 assert.equal(tryMatchVrm(), true);
 assert.equal(vrmModelSelect.value, '/user_vrm/' + encodeURIComponent(name));
 assert.equal(changed, 1);
+for (const rawPath of ['/user_vrm/a%20b.vrm', 'a%20b.vrm', '/user_vrm/a b.vrm', 'a b.vrm']) {{
+    const filenames = ['a b.vrm', 'a%20b.vrm'];
+    const options = filenames.map(filename => ({{value: '/user_vrm/' + encodeURIComponent(filename),
+        getAttribute: key => key === 'data-path' ? '/user_vrm/' + filename : key === 'data-filename' ? filename : null}}));
+    const expected = rawPath.split('/').pop();
+    assert.equal(ModelPathHelper.findVrmOption(options, rawPath).getAttribute('data-filename'), expected);
+}}
+assert.equal({source.count("ModelPathHelper.findVrmOption(vrmModelSelect.options,")}, 2, 'both selection and restoration must use the same identity rule');
 """)
 
 

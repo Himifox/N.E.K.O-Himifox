@@ -2894,15 +2894,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             const tryMatchVrm = () => {
                                 if (!_vrmPathSwitch) return false;
                                 const vrmPath = _vrmPathSwitch;
-                                const vrmFilename = vrmPath.split(/[/\\]/).pop();
-                                const matchedOption = Array.from(vrmModelSelect.options).find(opt => {
-                                    if (!opt.value) return false;
-                                    return (opt.getAttribute('data-path') || opt.value) === vrmPath;
-                                }) || Array.from(vrmModelSelect.options).find(opt => {
-                                    if (!opt.value) return false;
-                                    const optFilename = opt.getAttribute('data-filename') || '';
-                                    return optFilename === vrmFilename || opt.value.endsWith(vrmFilename);
-                                });
+                                const matchedOption = ModelPathHelper.findVrmOption(vrmModelSelect.options, vrmPath);
                                 if (matchedOption) {
                                     vrmModelSelect.value = matchedOption.value;
                                     dispatchModelManagerChange(vrmModelSelect);
@@ -9299,19 +9291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
 
                     // 在合并列表中查找匹配的 VRM 选项
-                    const vrmFilename = vrmModelPath.split(/[/\\]/).pop();
-                    const matchedOption = Array.from(vrmModelSelect.options).find(opt => {
-                        if (!opt.value) return false;
-                        const optPath = opt.getAttribute('data-path') || '';
-                        const optFilename = opt.getAttribute('data-filename') || '';
-                        const optValue = opt.value || '';
-
-                        if (optValue === vrmModelPath || optPath === vrmModelPath) return true;
-                        if (vrmFilename && (optFilename === vrmFilename || optValue.endsWith(vrmFilename) || optPath.endsWith(vrmFilename))) return true;
-                        if (vrmFilename && (optPath.includes(vrmFilename) || optValue.includes(vrmFilename))) return true;
-
-                        return false;
-                    });
+                    const matchedOption = ModelPathHelper.findVrmOption(vrmModelSelect.options, vrmModelPath);
 
                     if (matchedOption) {
                         vrmModelSelect.value = matchedOption.value;
