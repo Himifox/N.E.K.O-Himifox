@@ -864,16 +864,23 @@ window.checkAndLoadVRM = async function () {
                 console.warn('[VRM Init] 路径处理工具函数未初始化，跳过路径比较');
                 needReload = true;
             } else {
-                const currentFilename = getFilename(currentModelUrl);
-                const newFilename = getFilename(modelUrl);
+                // Both values are URLs; compare their once-decoded identities.
+                const decodeUrl = (value) => {
+                    try { return decodeURIComponent(value); }
+                    catch (_) { return value; }
+                };
+                const currentPath = decodeUrl(currentModelUrl);
+                const newPath = decodeUrl(modelUrl);
+                const currentFilename = getFilename(currentPath);
+                const newFilename = getFilename(newPath);
 
                 // 首先尝试文件名匹配（最宽松，处理路径前缀差异）
                 if (currentFilename && newFilename && currentFilename === newFilename) {
                     needReload = false;
                 } else {
                     // 如果文件名不同，尝试规范化路径匹配
-                    const normalizedCurrent = normalizePath(currentModelUrl);
-                    const normalizedNew = normalizePath(modelUrl);
+                    const normalizedCurrent = normalizePath(currentPath);
+                    const normalizedNew = normalizePath(newPath);
                     if (normalizedCurrent && normalizedNew && normalizedCurrent === normalizedNew) {
                         needReload = false;
                     } else if (currentModelUrl === modelUrl) {

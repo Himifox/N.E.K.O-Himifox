@@ -661,11 +661,15 @@ def _cleanup_vrm_emotion_mapping(model_name: str):
     try:
         config_mgr = get_config_manager()
         directories = (config_mgr.project_root / 'static' / 'vrm', config_mgr.vrm_dir)
-        if _vrm_model_stem_exists(model_name, directories):
-            return
         emotion_config = _get_emotion_config_path(model_name)
-        if emotion_config and emotion_config.is_file():
-            emotion_config.unlink()
+        if not emotion_config or not emotion_config.is_file():
+            return
+        for directory in directories:
+            for model in _iter_vrm_model_files(directory):
+                other_config = emotion_config.parent / f"{model.stem}_emotion.json"
+                if model.stem == model_name or (other_config.is_file() and other_config.samefile(emotion_config)):
+                    return
+        emotion_config.unlink()
     except Exception as e:
         logger.warning(f"删除情感映射配置失败: {e}")
 

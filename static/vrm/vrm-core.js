@@ -27,9 +27,13 @@ class VRMCore {
     static preferencePathFromUrl(modelUrl) {
         let path = modelUrl;
         if (/^https?:\/\//.test(modelUrl)) {
-            const url = new URL(modelUrl);
-            if (url.origin !== window.location?.origin) return modelUrl;
-            path = url.pathname;
+            try {
+                const url = new URL(modelUrl);
+                if (url.origin !== window.location?.origin) return modelUrl;
+                path = url.pathname;
+            } catch (_) {
+                return modelUrl;
+            }
         }
         if (!/^\/(?:user_vrm|static\/vrm|workshop)\//.test(path)) return modelUrl;
         try {

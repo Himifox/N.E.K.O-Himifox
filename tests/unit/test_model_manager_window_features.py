@@ -39,6 +39,33 @@ for (const raw of ['/user_vrm/猫娘 #100%.VRM', '/user_vrm/a%20b.vrm', 'https:/
 """)
 
 
+def test_vrm_window_return_compares_decoded_url_identities_once():
+    source = Path("static/vrm/vrm-init.js").read_text(encoding="utf-8")
+    helpers = source[source.index("window._vrmPathUtils ="):source.index("/**\n * 应用 VRM 打光")]
+    start = source.index("const currentModelUrl = window.vrmManager.currentModel?.url;")
+    comparison = source[start:source.index("// 直接使用刚刚拉取的", start)]
+    run_model_manager_node(f"""
+const assert = require('node:assert/strict');
+const window = {{vrmManager: {{currentModel: {{}}, loadModel: async () => {{ loads++; }}}}}};
+{helpers}
+let loads = 0;
+(async () => {{
+    for (const name of ['Avatar(1)', "Avatar!'()*", '猫娘 #100%', 'a%20b']) {{
+        const jsUrl = '/user_vrm/' + encodeURIComponent(name + '.vrm');
+        const pythonUrl = jsUrl.replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+        window.vrmManager.currentModel.url = pythonUrl;
+        const modelUrl = jsUrl;
+        {{ {comparison} }}
+        assert.equal(loads, 0, name + ' must not reload on window return');
+    }}
+    window.vrmManager.currentModel.url = '/user_vrm/a%2520b.vrm';
+    const modelUrl = '/user_vrm/a%20b.vrm';
+    {{ {comparison} }}
+    assert.equal(loads, 1, 'literal percent and space models must remain distinct');
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+""")
+
+
 MODEL_MANAGER_PART_NAMES = (
     "named-window-registration.js",
     "runtime-loaders.js",
@@ -144,6 +171,7 @@ const context = vm.createContext({{ URL, window: {{location: {{origin: 'http://l
 vm.runInContext('class VRMCore {{' + {json.dumps(path_method)} + '}}', context);
 assert.equal(vm.runInContext("VRMCore.preferencePathFromUrl('https://external.example/user_vrm/a%20b.vrm')", context), 'https://external.example/user_vrm/a%20b.vrm');
 assert.equal(vm.runInContext("VRMCore.preferencePathFromUrl('http://localhost/user_vrm/a%20b.vrm')", context), '/user_vrm/a b.vrm');
+assert.equal(vm.runInContext("VRMCore.preferencePathFromUrl('https://[invalid/user_vrm/a.vrm')", context), 'https://[invalid/user_vrm/a.vrm');
 for (const filename of ['My Avatar.vrm', '猫娘.vrm', 'Avatar#100%.vrm', 'a b.vrm', 'a%20b.vrm', 'a%2Fb.vrm']) {{
     const raw = '/user_vrm/' + filename;
     context.modelUrl = '/user_vrm/' + encodeURIComponent(filename);

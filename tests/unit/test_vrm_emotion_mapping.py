@@ -233,12 +233,17 @@ def test_deleting_user_model_preserves_builtin_shared_mapping(vrm_api, extension
     user.write_bytes(b'user model')
     mapping = {'happy': ['shared smile']}
     assert client.post(f'{API}/emotion_mapping/Avatar', json=mapping).status_code == 200
+    config_dir = config.project_root / 'static' / 'vrm' / 'configs'
+    shares_mapping = (config_dir / f'{builtin_name}_emotion.json').exists()
     deleted = (client.request('DELETE', f'{API}/model', json={'url': '/user_vrm/Avatar.vrm'})
                if by_url else client.delete(f'{API}/model/Avatar'))
     assert deleted.status_code == 200
     assert not user.exists()
     assert builtin.read_bytes() == b'builtin model'
-    assert client.get(f'{API}/emotion_mapping/Avatar').json()['config'] == mapping
+    if shares_mapping:
+        assert client.get(f'{API}/emotion_mapping/Avatar').json()['config'] == mapping
+    else:
+        assert not (config_dir / 'Avatar_emotion.json').exists()
 
 
 @pytest.mark.parametrize('by_url', [False, True])
@@ -285,6 +290,7 @@ def test_existing_raw_config_paths_produce_encoded_fetch_urls(vrm_api, location,
     assert _resolve_vrm_path('https://example.com/a%20b.vrm', config, 'Test') == 'https://example.com/a%20b.vrm'
     custom_url = '/api/models/current.vrm?token=abc#part'
     assert _resolve_vrm_path(custom_url, config, 'Test') == custom_url
+    assert _resolve_vrm_path('/workshop/123/猫娘#100%.VRM', config, 'Test') == '/workshop/123/%E7%8C%AB%E5%A8%98%23100%25.VRM'
 
 
 def test_delete_preserves_mapping_when_remaining_models_cannot_be_checked(vrm_api, monkeypatch):
