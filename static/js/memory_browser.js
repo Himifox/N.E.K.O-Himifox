@@ -14,6 +14,7 @@
         { id: 'review', endpoint: '/api/memory/review_config', enabled: null, phase: 'idle', saveFailed: false },
         { id: 'strong-memory', endpoint: '/api/memory/powerful_memory_config', enabled: null, phase: 'idle', saveFailed: false }
     ];
+    const MEMORY_TOGGLE_REQUEST_TIMEOUT_MS = 30000;
     let memorySaveInFlight = null;
     let memoryRowExitInProgress = false;
     let memoryRowExitTimer = 0;
@@ -4825,6 +4826,10 @@
     window.addEventListener('beforeunload', teardownMemoryRolePanelPositionSync);
     // 页面加载时隐藏保存按钮
     document.addEventListener('DOMContentLoaded', async function () {
+        document.addEventListener('focusin', () => {
+            // A user who moved elsewhere must not be pulled back when a request finishes.
+            memoryToggleSettings.forEach(setting => { setting.restoreFocus = false; });
+        });
         memoryToggleSettings.forEach(setting => {
             const checkbox = document.getElementById(`${setting.id}-toggle-checkbox`);
             const retry = document.getElementById(`${setting.id}-toggle-retry`);
@@ -4853,6 +4858,7 @@
         } else {
             memoryStorageLimited = false;
             memoryToggleSettings.forEach(renderMemoryToggle);
+            memoryToggleSettings.forEach(loadMemoryToggleConfig);
             // Load the identity list now that the root is settled. Measured
             // as redundant today -- a later control sync reaches it anyway,
             // and removing this line keeps the guard test green -- but that
@@ -4870,7 +4876,6 @@
                     console.warn('[MemoryBrowser] Failed to resolve external-memory target:', error);
                 }
             }
-            memoryToggleSettings.forEach(loadMemoryToggleConfig);
         }
         document.getElementById('save-row').style.display = 'none';
 
@@ -5089,6 +5094,10 @@
         const limited = storageLocationState.limited;
         const busy = setting.phase === 'loading' || setting.phase === 'saving';
         const disabled = memoryStorageLimited || setting.phase !== 'ready';
+        const retry = document.getElementById(`${setting.id}-toggle-retry`);
+        if (busy && (document.activeElement === checkbox || document.activeElement === retry)) {
+            setting.restoreFocus = true;
+        }
         checkbox.disabled = disabled;
         checkbox.checked = !limited && (setting.phase === 'saving'
             ? setting.pendingEnabled : setting.enabled === true);
@@ -5124,8 +5133,29 @@
             }
             status.parentElement.hidden = !statusKey;
         }
-        const retry = document.getElementById(`${setting.id}-toggle-retry`);
         if (retry) retry.hidden = memoryStorageLimited || setting.phase !== 'error';
+        if (!busy && setting.restoreFocus) {
+            setting.restoreFocus = false;
+            const target = setting.phase === 'error' ? retry : checkbox;
+            const panel = checkbox.closest('.memory-aux-panel');
+            if (document.activeElement === document.body && panel && !panel.hidden
+                && target && !target.disabled && !target.hidden && !memoryStorageLimited) {
+                target.focus();
+            }
+        }
+    }
+
+    async function requestMemoryToggleConfig(setting, options = {}) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), MEMORY_TOGGLE_REQUEST_TIMEOUT_MS);
+        try {
+            const resp = await fetch(setting.endpoint, { ...options, signal: controller.signal });
+            if (!resp.ok) throw new Error(`Config request failed: ${resp.status}`);
+            // Keep the deadline active until the response body has also been read.
+            return await resp.json();
+        } finally {
+            clearTimeout(timeout);
+        }
     }
 
     async function loadMemoryToggleConfig(setting) {
@@ -5133,9 +5163,7 @@
         setting.phase = 'loading';
         renderMemoryToggle(setting);
         try {
-            const resp = await fetch(setting.endpoint);
-            if (!resp.ok) throw new Error(`Config read failed: ${resp.status}`);
-            const data = await resp.json();
+            const data = await requestMemoryToggleConfig(setting);
             if (typeof data.enabled !== 'boolean') throw new Error('Invalid config value');
             setting.enabled = data.enabled;
             // A recovery read can confirm the requested value despite a lost save response.
@@ -5159,13 +5187,11 @@
         setting.saveFailed = false;
         renderMemoryToggle(setting);
         try {
-            const resp = await fetch(setting.endpoint, {
+            const data = await requestMemoryToggleConfig(setting, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled })
             });
-            if (!resp.ok) throw new Error(`Config save failed: ${resp.status}`);
-            const data = await resp.json();
             if (data.success !== true || typeof data.enabled !== 'boolean') {
                 throw new Error('Config save was not confirmed');
             }
