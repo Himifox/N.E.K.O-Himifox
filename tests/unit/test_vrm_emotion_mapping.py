@@ -44,9 +44,10 @@ def vrm_api(tmp_path, monkeypatch):
     ["Avatar", "My Avatar", "Avatar(1)", "Avatar[1]", "猫娘", "猫娘 🐱",
      "Cafe\u0301", "Avatar.v1_2-test", "Avatar#100%"],
 )
-def test_uploaded_model_emotion_mapping_roundtrip(vrm_api, model_name):
+@pytest.mark.parametrize("extension", [".vrm", ".VRM", ".VrM"])
+def test_uploaded_model_emotion_mapping_roundtrip(vrm_api, model_name, extension):
     client, config = vrm_api
-    filename = f"{model_name}.vrm"
+    filename = f"{model_name}{extension}"
     # Upload routes store opaque bytes; VRM rendering is outside this test.
     content = b"glTF"
     uploaded = client.post(f"{API}/upload", files={"file": (filename, content)})
@@ -78,6 +79,51 @@ def test_bundled_model_with_punctuation_can_save_mapping(vrm_api):
     mapping = {"happy": ["custom smile"]}
     assert client.post(url, json=mapping).status_code == 200
     assert client.get(url).json()["config"] == mapping
+
+
+@pytest.mark.parametrize("location", ["builtin", "user"])
+@pytest.mark.parametrize("extension", [".VRM", ".VrM"])
+def test_existing_models_with_uppercase_extensions_can_save_mapping(vrm_api, location, extension):
+    client, config = vrm_api
+    model_name = "Existing Avatar(1)"
+    directory = (config.project_root / "static" / "vrm"
+                 if location == "builtin" else config.vrm_dir)
+    filename = f"{model_name}{extension}"
+    model_path = directory / filename
+    model_path.write_bytes(b"existing model sentinel")
+    models = client.get(f"{API}/models").json()["models"]
+    assert any(model["name"] == model_name and model["filename"] == filename
+               for model in models)
+    url = f"{API}/emotion_mapping/{quote(model_name, safe='')}"
+    mapping = {"happy": ["existing model smile"]}
+    assert client.post(url, json=mapping).status_code == 200
+    assert client.get(url).json()["config"] == mapping
+    assert model_path.read_bytes() == b"existing model sentinel"
+    assert {path.name for path in directory.iterdir() if path.is_file()} == {filename}
+
+
+@pytest.mark.parametrize("filename", [
+    "What?.vrm", "model:stream.vrm", "model*.vrm", "model|stream.vrm", "<model>.vrm", ".vrm",
+])
+def test_invalid_upload_names_are_rejected_without_writes(vrm_api, filename):
+    client, config = vrm_api
+    response = client.post(f"{API}/upload", files={"file": (filename, b"glTF")})
+    assert response.status_code == 400
+    assert response.json()["success"] is False
+    assert not list(config.vrm_dir.iterdir())
+    assert not (config.project_root / "static" / "vrm" / "configs").exists()
+
+
+def test_model_lookup_requires_matching_stem_and_extension(vrm_api):
+    client, config = vrm_api
+    for filename in ["Other.VRM", "Avatar.vrma", "Avatar.vrm.bak"]:
+        (config.vrm_dir / filename).write_bytes(b"unrelated sentinel")
+    (config.vrm_dir / "Avatar.VRM").mkdir()
+    response = client.post(f"{API}/emotion_mapping/Avatar", json={"happy": ["smile"]})
+    assert response.status_code == 404
+    assert not (config.project_root / "static" / "vrm" / "configs").exists()
+    models = client.get(f"{API}/models").json()["models"]
+    assert [model["filename"] for model in models] == ["Other.VRM"]
 
 
 @pytest.mark.parametrize("names", [("Avatar(1)", "Avatar1"), ("My Avatar", "MyAvatar")])
@@ -114,8 +160,45 @@ def test_missing_model_does_not_create_emotion_mapping(vrm_api):
     assert not (config.project_root / "static" / "vrm" / "configs").exists()
 
 
-@pytest.mark.parametrize("location", ["config", "builtin", "user"])
-def test_resolved_paths_cannot_escape_their_directory(vrm_api, tmp_path, location):
+@pytest.mark.parametrize("location,extension", [
+    ("config", ".vrm"), ("builtin", ".vrm"), ("user", ".vrm"),
+    ("builtin", ".VRM"), ("user", ".VRM"),
+])
+def test_outside_resolved_paths_are_rejected(vrm_api, tmp_path, monkeypatch, location, extension):
+    _, config = vrm_api
+    name = "My Avatar(1)"
+    static_dir = config.project_root / "static" / "vrm"
+    if location == "config":
+        directory = static_dir / "configs"
+        directory.mkdir()
+        candidate = directory / f"{name}_emotion.json"
+    else:
+        directory = static_dir if location == "builtin" else config.vrm_dir
+        candidate = directory / f"{name}{extension}"
+    candidate.write_bytes(b"inside sentinel")
+    outside = tmp_path / "outside.vrm"
+    outside.write_bytes(b"outside sentinel")
+    original_resolve = type(candidate).resolve
+
+    def resolve(path, *args, **kwargs):
+        if path == candidate:
+            return outside
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(candidate), "resolve", resolve)
+    if location == "config":
+        assert vrm_router._get_emotion_config_path(name) is None
+    else:
+        assert vrm_router._get_model_path(name) == (None, "")
+    assert candidate.read_bytes() == b"inside sentinel"
+    assert outside.read_bytes() == b"outside sentinel"
+
+
+@pytest.mark.parametrize("location,extension", [
+    ("config", ".vrm"), ("builtin", ".vrm"), ("user", ".vrm"),
+    ("builtin", ".VRM"), ("user", ".VRM"),
+])
+def test_resolved_paths_cannot_escape_their_directory(vrm_api, tmp_path, location, extension):
     _, config = vrm_api
     name = "My Avatar(1)"
     outside = tmp_path / "outside.vrm"
@@ -127,7 +210,7 @@ def test_resolved_paths_cannot_escape_their_directory(vrm_api, tmp_path, locatio
         link = config_dir / f"{name}_emotion.json"
     else:
         model_dir = static_dir if location == "builtin" else config.vrm_dir
-        link = model_dir / f"{name}.vrm"
+        link = model_dir / f"{name}{extension}"
     try:
         link.symlink_to(outside)
     except (OSError, NotImplementedError) as exc:

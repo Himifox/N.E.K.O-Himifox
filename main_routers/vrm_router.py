@@ -112,6 +112,14 @@ async def _handle_vrm_file_upload(
         
         # 只取文件名，避免上传时夹带子目录
         filename = Path(filename).name
+
+        if allowed_extension == '.vrm':
+            model_name = filename[:-len(allowed_extension)]
+            if not _is_valid_vrm_model_name(model_name):
+                return JSONResponse(status_code=400, content={
+                    "success": False,
+                    "error": f"无效的模型名称: {model_name!r}"
+                })
         
         # 使用安全路径函数防止路径穿越
         target_file_path, path_error = safe_vrm_path(target_dir, filename, subdir)
@@ -220,6 +228,14 @@ async def upload_vrm_animation(file: UploadFile = File(...)):
     return await _handle_vrm_file_upload(file, user_vrm_dir, '.vrma', '动作文件', 'animation')
 
 
+def _iter_vrm_model_files(vrm_dir: Path):
+    """Yield model files using the upload endpoint's case-insensitive extension rule."""
+    if vrm_dir.exists():
+        for path in vrm_dir.iterdir():
+            if path.suffix.lower() == '.vrm' and path.is_file():
+                yield path
+
+
 @router.get('/models')
 async def get_vrm_models():
     """List VRM models (without exposing absolute filesystem paths)."""
@@ -234,7 +250,7 @@ async def get_vrm_models():
         project_root = config_mgr.project_root
         static_vrm_dir = project_root / "static" / "vrm"
         if static_vrm_dir.exists():
-            for vrm_file in static_vrm_dir.glob('*.vrm'):
+            for vrm_file in _iter_vrm_model_files(static_vrm_dir):
                 url = f"/static/vrm/{vrm_file.name}"
                 # 跳过已存在的 URL（避免重复）
                 if url in seen_urls:
@@ -255,7 +271,7 @@ async def get_vrm_models():
         # 2. 搜索用户目录下的VRM文件 (user_vrm/)
         vrm_dir = config_mgr.vrm_dir
         if vrm_dir.exists():
-            for vrm_file in vrm_dir.glob('*.vrm'):
+            for vrm_file in _iter_vrm_model_files(vrm_dir):
                 url = f"{VRM_USER_PATH}/{vrm_file.name}"
                 # 跳过已存在的 URL（避免重复）
                 if url in seen_urls:
@@ -593,29 +609,28 @@ def _get_model_path(model_name: str) -> tuple[Path | None, str]:
     config_mgr = get_config_manager()
     project_root = config_mgr.project_root
 
-    # 1. 检查项目目录
-    static_vrm_dir = project_root / "static" / "vrm"
-    static_vrm_path = static_vrm_dir / f"{model_name}.vrm"
-    try:
-        resolved = static_vrm_path.resolve()
-        resolved.relative_to(static_vrm_dir.resolve())
-    except ValueError:
-        logger.warning(f"路径穿越尝试被阻止: {model_name!r}")
-        return None, ""
-    if resolved.suffix == '.vrm' and resolved.is_file():
-        return resolved, "/static/vrm"
-
-    # 2. 检查用户目录
-    config_mgr.ensure_vrm_directory()
-    user_vrm_path = config_mgr.vrm_dir / f"{model_name}.vrm"
-    try:
-        resolved = user_vrm_path.resolve()
-        resolved.relative_to(config_mgr.vrm_dir.resolve())
-    except ValueError:
-        logger.warning(f"路径穿越尝试被阻止: {model_name!r}")
-        return None, ""
-    if resolved.suffix == '.vrm' and resolved.is_file():
-        return resolved, VRM_USER_PATH
+    # 优先项目目录和原有的小写扩展名，再兼容磁盘上已有的大小写变体。
+    for vrm_dir, url_prefix in (
+        (project_root / "static" / "vrm", VRM_STATIC_PATH),
+        (config_mgr.vrm_dir, VRM_USER_PATH),
+    ):
+        if url_prefix == VRM_USER_PATH:
+            config_mgr.ensure_vrm_directory()
+        canonical_path = vrm_dir / f"{model_name}.vrm"
+        candidates = [canonical_path]
+        candidates.extend(sorted(
+            path for path in _iter_vrm_model_files(vrm_dir)
+            if path.stem == model_name and path != canonical_path
+        ))
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                resolved.relative_to(vrm_dir.resolve())
+            except ValueError:
+                logger.warning(f"路径穿越尝试被阻止: {model_name!r}")
+                return None, ""
+            if resolved.suffix.lower() == '.vrm' and resolved.is_file():
+                return resolved, url_prefix
 
     return None, ""
 
