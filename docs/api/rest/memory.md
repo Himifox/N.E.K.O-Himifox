@@ -165,7 +165,11 @@ Returns whether automatic review and correction of recent memory is enabled. The
 { "enabled": true }
 ```
 
+Reads wait for pending memory-toggle writes before returning the persisted value. Missing files or setting keys default to `true`. Unreadable files, malformed JSON, a non-object configuration, or a non-boolean setting return HTTP `503` with `{"error": "..."}` and no `enabled` value.
+
 ### `POST /api/memory/review_config`
+
+The body must be a JSON object with a required boolean `enabled`; malformed JSON, a missing field, or any other type returns HTTP `400` with `{"success": false, "error": "..."}`. Read or save failures return `success: false` without replacing an unreadable or invalid configuration. Only a missing file starts a new configuration. The two memory-toggle updates are serialized through any required migration and file save.
 
 ```json
 { "enabled": false }
@@ -187,7 +191,11 @@ Returns the `powerful_memory_enabled` setting. The default is `true` for existin
 { "enabled": true }
 ```
 
+Reads wait for pending memory-toggle writes before returning the persisted value. Missing files or setting keys default to `true`. Unreadable files, malformed JSON, a non-object configuration, or a non-boolean setting return HTTP `503` with `{"error": "..."}` and no `enabled` value.
+
 ### `POST /api/memory/powerful_memory_config`
+
+The body must be a JSON object with a required boolean `enabled`; malformed JSON, a missing field, or any other type returns HTTP `400` with `{"success": false, "error": "..."}`. Read or save failures return `success: false` without replacing an unreadable or invalid configuration. Only a missing file starts a new configuration. The two memory-toggle updates are serialized through any required migration and file save.
 
 ```json
 { "enabled": false }
