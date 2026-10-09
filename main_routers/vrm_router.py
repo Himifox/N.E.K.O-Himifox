@@ -652,7 +652,7 @@ def _find_vrm_model_file(vrm_dir: Path, model_name: str) -> Path | None:
 def _is_vrm_basename(filename: str) -> bool:
     # Legacy files can violate the upload policy. Keep the directory boundary
     # check in both deletion routes and reject path syntax here.
-    return filename.lower().endswith('.vrm') and not any(
+    return filename.lower().endswith('.vrm') and Path(filename).name == filename and not any(
         char in filename for char in ('/', chr(92), chr(0))
     )
 

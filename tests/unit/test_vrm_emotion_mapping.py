@@ -400,6 +400,24 @@ def test_legacy_files_can_be_deleted_without_relaxing_upload_policy(vrm_api, fil
     assert other.read_bytes() == b"sentinel"
 
 
+@pytest.mark.parametrize("by_url", [False, True])
+def test_delete_never_interprets_a_legacy_name_as_a_drive_prefix(vrm_api, by_url):
+    client, config = vrm_api
+    filename = "C:Other.vrm"
+    other = config.vrm_dir / "Other.vrm"
+    other.write_bytes(b"other sentinel")
+    target = config.vrm_dir / filename
+    is_alias = target.name != filename
+    if not is_alias:
+        target.write_bytes(b"legacy colon filename")
+    response = (client.request('DELETE', f'{API}/model', json={'url': '/user_vrm/' + quote(filename, safe='')})
+                if by_url else client.delete(f'{API}/model/' + quote(filename[:-4], safe='')))
+    assert response.status_code == (400 if is_alias else 200)
+    assert other.read_bytes() == b"other sentinel"
+    if not is_alias:
+        assert not target.exists()
+
+
 @pytest.mark.parametrize("space_model_exists", [False, True])
 def test_delete_never_falls_back_to_encoded_filename(vrm_api, space_model_exists):
     client, config = vrm_api
