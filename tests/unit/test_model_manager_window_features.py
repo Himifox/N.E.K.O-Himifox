@@ -70,6 +70,23 @@ let loads = 0;
     const modelUrl = '/user_vrm/a%20b.vrm';
     {{ {comparison} }}
     assert.equal(loads, 1, 'literal percent and space models must remain distinct');
+    for (const [previous, next] of [
+        ['/api/models/a%3Fb.vrm', '/api/models/a?b.vrm'],
+        ['/api/models/a%23b.vrm', '/api/models/a#b.vrm'],
+        ['/user_vrm/a%3Fb.vrm', '/user_vrm/a?b.vrm'],
+        ['/user_vrm/a%23b.vrm', '/user_vrm/a#b.vrm'],
+        ['/user_vrm/a%2Fb.vrm', '/user_vrm/a/b.vrm'],
+        ['https://one.example/a.vrm', 'https://two.example/a.vrm'],
+    ]) {{
+        window.vrmManager.currentModel.url = previous;
+        const modelUrl = next;
+        const before = loads;
+        {{ {comparison} }}
+        assert.equal(loads, before + 1, 'distinct URL components must reload');
+        window.vrmManager.currentModel.url = next;
+        {{ {comparison} }}
+        assert.equal(loads, before + 1, 'an unchanged custom URL must not reload');
+    }}
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """)
 

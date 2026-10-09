@@ -853,9 +853,10 @@ window.checkAndLoadVRM = async function () {
 
         // 8. 检查是否需要重新加载模型（使用规范化比较，避免路径前缀差异导致不必要的重载）
         const currentModelUrl = window.vrmManager.currentModel?.url;
-        let needReload = true;
+        let needReload = currentModelUrl !== modelUrl;
 
-        if (currentModelUrl) {
+        const isLocalFileUrl = value => /^\/(?:user_vrm|static\/vrm|workshop)\//.test(value || '');
+        if (isLocalFileUrl(currentModelUrl) && isLocalFileUrl(modelUrl)) {
             // 使用共享的路径处理工具函数（避免与 vrm-core.js 重复）
             const getFilename = window._vrmPathUtils?.getFilename;
             const normalizePath = window._vrmPathUtils?.normalizePath;
@@ -864,13 +865,18 @@ window.checkAndLoadVRM = async function () {
                 console.warn('[VRM Init] 路径处理工具函数未初始化，跳过路径比较');
                 needReload = true;
             } else {
-                // Both values are URLs; compare their once-decoded identities.
-                const decodeUrl = (value) => {
-                    try { return decodeURIComponent(value); }
+                // Normalize local path segments without turning encoded delimiters
+                // into URL query/fragment syntax. Custom URLs retain exact identity.
+                const normalizeLocalUrl = (value) => {
+                    try {
+                        const url = new URL(value, 'http://vrm.local');
+                        return url.pathname.split('/').map(segment =>
+                            encodeURIComponent(decodeURIComponent(segment))).join('/') + url.search + url.hash;
+                    }
                     catch (_) { return value; }
                 };
-                const currentPath = decodeUrl(currentModelUrl);
-                const newPath = decodeUrl(modelUrl);
+                const currentPath = normalizeLocalUrl(currentModelUrl);
+                const newPath = normalizeLocalUrl(modelUrl);
                 const currentFilename = getFilename(currentPath);
                 const newFilename = getFilename(newPath);
 
