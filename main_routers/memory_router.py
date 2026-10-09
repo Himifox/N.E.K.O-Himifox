@@ -1484,19 +1484,34 @@ async def update_catgirl_name(request: Request):
         return {"success": False, "error": str(exc)}
 
 
+def _load_memory_toggle_enabled(config_manager, key):
+    """Default missing settings to on, but propagate unreadable or invalid config."""
+    try:
+        # Omitting default_value prevents the loader from hiding read/parse errors.
+        config_data = config_manager.load_json_config('core_config.json')
+    except FileNotFoundError:
+        return True
+    if not isinstance(config_data, dict):
+        raise ValueError('Invalid memory configuration')
+    enabled = config_data.get(key, True)
+    if not isinstance(enabled, bool):
+        raise ValueError('Invalid memory setting value')
+    return enabled
+
+
 @router.get('/review_config')
 async def get_review_config():
     """Get the memory review configuration."""
     try:
         from utils.config_manager import get_config_manager
         config_manager = get_config_manager()
-        config_data = await asyncio.to_thread(
-            config_manager.load_json_config, 'core_config.json', default_value={}
+        enabled = await asyncio.to_thread(
+            _load_memory_toggle_enabled, config_manager, 'recent_memory_auto_review'
         )
-        return {"enabled": config_data.get('recent_memory_auto_review', True)}
+        return {"enabled": enabled}
     except Exception as e:
         logger.error(f"读取记忆整理配置失败: {e}")
-        return {"enabled": True}
+        return JSONResponse({"error": "Failed to read memory review configuration"}, status_code=503)
 
 
 @router.post('/review_config')
@@ -1535,13 +1550,13 @@ async def get_powerful_memory_config():
     try:
         from utils.config_manager import get_config_manager
         config_manager = get_config_manager()
-        config_data = await asyncio.to_thread(
-            config_manager.load_json_config, 'core_config.json', default_value={}
+        enabled = await asyncio.to_thread(
+            _load_memory_toggle_enabled, config_manager, 'powerful_memory_enabled'
         )
-        return {"enabled": config_data.get('powerful_memory_enabled', True)}
+        return {"enabled": enabled}
     except Exception as e:
         logger.error(f"读取强力记忆配置失败: {e}")
-        return {"enabled": True}
+        return JSONResponse({"error": "Failed to read powerful memory configuration"}, status_code=503)
 
 
 @router.post('/powerful_memory_config')

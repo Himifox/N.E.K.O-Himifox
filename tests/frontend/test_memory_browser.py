@@ -51,7 +51,7 @@ def _install_delayed_memory_toggle_routes(page: Page, memory_file: Path, endpoin
         else:
             state["reads"] += 1
             if state["fail_read"]:
-                route.fulfill(status=500, json={"error": "read failed"})
+                route.fulfill(status=503, json={"error": "read failed"})
             else:
                 route.fulfill(status=200, json={"enabled": state["enabled"]})
 
@@ -64,10 +64,15 @@ def _install_delayed_memory_toggle_routes(page: Page, memory_file: Path, endpoin
         const gate = new Promise(resolve => { release = resolve; });
         window.__releaseMemoryConfigRead = release;
         window.__memoryConfigReadCaptured = false;
+        window.__memoryConfigPostCount = 0;
         const nativeFetch = window.fetch.bind(window);
         window.fetch = async function (input, options) {
-            const response = await nativeFetch(input, options);
             const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+            // Count before the first await so assertions do not depend on route delivery.
+            if (url.pathname === target && options && options.method === 'POST') {
+                window.__memoryConfigPostCount += 1;
+            }
+            const response = await nativeFetch(input, options);
             if (url.pathname === target && (!options || !options.method || options.method === 'GET')) {
                 const readJson = response.json.bind(response);
                 response.json = async function () {
@@ -5061,7 +5066,8 @@ def test_memory_browser_toggle_waits_for_initial_read(
     expect(text).to_have_attribute("data-i18n", "common.loading")
     expect(mock_page.locator(f"#{checkbox_id.removesuffix('-checkbox')}-status")).to_be_visible()
     label.click(force=True)
-    mock_page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
+    assert mock_page.evaluate("window.__memoryConfigPostCount") == 0
+    expect(checkbox).not_to_be_checked()
     assert state["post_route"] is None
 
     _release_memory_config_read(mock_page)
@@ -5105,7 +5111,8 @@ def test_memory_browser_toggle_serializes_saves(
     label.click(force=True)
     # Also verify the handler guard against an extra change event while busy.
     checkbox.dispatch_event("change")
-    mock_page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
+    assert mock_page.evaluate("window.__memoryConfigPostCount") == 1
+    expect(checkbox).to_be_checked()
     assert len(state["posts"]) == 1
     state["enabled"] = True
     first.fulfill(status=200, json={"success": True, "enabled": True})
@@ -5114,6 +5121,7 @@ def test_memory_browser_toggle_serializes_saves(
 
     with mock_page.expect_request(lambda request: endpoint in request.url and request.method == "POST"):
         label.click()
+    assert mock_page.evaluate("window.__memoryConfigPostCount") == 2
     assert len(state["posts"]) == 2
     assert _request_json(state["post_route"]) == {"enabled": False}
     state["enabled"] = False
@@ -5184,7 +5192,7 @@ def test_memory_browser_failed_initial_read_can_retry(
         elif failure == "invalid_value":
             route.fulfill(status=200, json={"enabled": "false"})
         else:
-            route.fulfill(status=500, json={"enabled": True})
+            route.fulfill(status=503, json={"error": "read failed"})
 
     mock_page.route(f"**{endpoint}", handle_config)
     mock_page.goto(f"{running_server}/memory_browser")
