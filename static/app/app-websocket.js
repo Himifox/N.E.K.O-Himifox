@@ -2601,6 +2601,22 @@
     // refresh so a window that missed that reload cannot keep a stale view.
     refreshCoreApiCapability();
 
+    function syncProactiveVisionConsent(enabled) {
+        if (typeof enabled !== 'boolean') {
+            enabled = window.appProactive
+                && typeof window.appProactive.isProactiveVisionEnabledNow === 'function'
+                ? window.appProactive.isProactiveVisionEnabledNow()
+                : S.proactiveVisionEnabled;
+        }
+        if (typeof enabled !== 'boolean' || !S.socket || S.socket.readyState !== WebSocket.OPEN) return;
+        try {
+            S.socket.send(JSON.stringify({ action: 'proactive_vision_consent', enabled: enabled }));
+        } catch (error) {
+            console.warn('[App] proactive vision consent sync failed:', error);
+        }
+    }
+    mod.syncProactiveVisionConsent = syncProactiveVisionConsent;
+
     /**
      * Wait for the WebSocket to reach OPEN state.
      *   - Already OPEN  -> resolves immediately
@@ -2949,6 +2965,7 @@
             if (S.socket !== _thisSocket) return;
             if (window.nekoReplyTail) window.nekoReplyTail.reset();
             announceReplyTailCapability();
+            if (window.appSettings) syncProactiveVisionConsent();
             console.log(window.t('console.websocketConnected'));
             // The state module publishes read errors; reconnect must remain usable.
             window.appChatAvatarState?.refresh('reconnect')?.catch?.(() => {});

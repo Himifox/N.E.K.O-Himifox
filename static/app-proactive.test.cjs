@@ -450,3 +450,30 @@ test('screenshot exceptions and legacy replies keep privacy separate from techni
         }
     }
 });
+
+
+test('live vision consent sends a typed snapshot only on an open socket', () => {
+    const websocketSource = fs.readFileSync(path.join(__dirname, 'app/app-websocket.js'), 'utf8');
+    const start = websocketSource.indexOf('    function syncProactiveVisionConsent(');
+    const end = websocketSource.indexOf('    function ensureWebSocketOpen(', start);
+    const sent = [];
+    const state = { proactiveVisionEnabled: true, socket: { readyState: 1, send(raw) { sent.push(JSON.parse(raw)); } } };
+    const mod = {};
+    const window = {};
+    vm.runInNewContext(websocketSource.slice(start, end), { window, S: state, mod, WebSocket: { OPEN: 1 }, console: { warn() {} } });
+    mod.syncProactiveVisionConsent(false);
+    mod.syncProactiveVisionConsent(true);
+    state.proactiveVisionEnabled = false;
+    mod.syncProactiveVisionConsent();
+    assert.deepEqual(sent, [false, true, false].map(enabled => ({ action: 'proactive_vision_consent', enabled })));
+    state.socket.readyState = 0;
+    mod.syncProactiveVisionConsent(false);
+    assert.equal(sent.length, 3);
+    state.socket = null;
+    mod.syncProactiveVisionConsent(false);
+    state.socket = { readyState: 1, send() { throw new Error('synthetic disconnect'); } };
+    assert.doesNotThrow(() => mod.syncProactiveVisionConsent(false));
+    state.socket = { readyState: 1, send() { assert.fail('unknown consent must not be sent'); } };
+    state.proactiveVisionEnabled = undefined;
+    mod.syncProactiveVisionConsent();
+});

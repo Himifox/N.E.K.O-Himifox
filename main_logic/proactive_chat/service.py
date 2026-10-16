@@ -524,6 +524,7 @@ async def handle_proactive_chat(
 
         # 获取session manager
         mgr = session_manager.get(lanlan_name)
+        vision_consent_epoch = getattr(mgr, "_proactive_vision_revocation_epoch", 0)
         manager_exists = bool(mgr)
         entry_result = _decide_manager_entry_guard(
             lanlan_name,
@@ -2415,6 +2416,7 @@ async def handle_proactive_chat(
 
         guarded_output = await _run_phase2_generation(
             mgr=mgr,
+            vision_consent_epoch=vision_consent_epoch,
             proactive_sid=proactive_sid,
             model_config=model_config,
             lanlan_name=lanlan_name,

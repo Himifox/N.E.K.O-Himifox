@@ -63,12 +63,24 @@ from .callback_render import _build_callback_instruction, _select_callbacks_with
 class ProactiveMixin:
     """Proactive delivery methods (see module docstring)."""
 
-    @staticmethod
-    async def _proactive_screenshot_privacy_enabled() -> bool:
+    def update_proactive_vision_consent(self, enabled: bool) -> None:
+        """Apply live browser consent without granting persisted permission."""
+        if not isinstance(enabled, bool):
+            return
+        if not enabled and getattr(self, "_proactive_vision_enabled", None) is not False:
+            self._proactive_vision_revocation_epoch = (
+                getattr(self, "_proactive_vision_revocation_epoch", 0) + 1
+            )
+        self._proactive_vision_enabled = enabled
+
+    async def _proactive_screenshot_privacy_enabled(self) -> bool:
         """Read current consent strictly: unreadable preferences must not grant capture."""
         try:
             settings = await _core_facade.aload_global_conversation_settings(strict=True)
-            return settings.get("proactiveVisionEnabled", True) is not True
+            return (
+                getattr(self, "_proactive_vision_enabled", None) is False
+                or settings.get("proactiveVisionEnabled", True) is not True
+            )
         except Exception as exc:
             logger.warning("Proactive screenshot privacy check failed; declining capture: %s", exc)
             return True
@@ -198,7 +210,7 @@ class ProactiveMixin:
         also forbids desktop fallback if the frontend fails to answer.
         Neither path draws the avatar annotation; the caller owns that step.
         """
-        if await ProactiveMixin._proactive_screenshot_privacy_enabled():
+        if await ProactiveMixin._proactive_screenshot_privacy_enabled(self):
             return FreshScreenshot(declined=True)
 
         # 策略1: 前端 WebSocket 截图
@@ -237,7 +249,7 @@ class ProactiveMixin:
                             self.lanlan_name, comp_err,
                         )
                     # 用户可能在等待前端或压缩期间开启隐私；旧客户端也不能绕过它。
-                    if await ProactiveMixin._proactive_screenshot_privacy_enabled():
+                    if await ProactiveMixin._proactive_screenshot_privacy_enabled(self):
                         return FreshScreenshot(declined=True)
                     return FreshScreenshot(
                         b64=b64, source="websocket", avatar_position=ws_av_pos,
@@ -249,8 +261,12 @@ class ProactiveMixin:
                 self._pending_screenshot_avatar_position = None
 
         # 窗口约束随初始请求传来，前端超时/断线时也不能扩大到整桌面。
-        if not allow_backend_fallback or await ProactiveMixin._proactive_screenshot_privacy_enabled():
+        if await ProactiveMixin._proactive_screenshot_privacy_enabled(self):
             return FreshScreenshot(declined=True)
+        if not allow_backend_fallback:
+            # No new desktop capture; an ordinary timeout may still reuse the
+            # already validated Phase-1 window image. Only a decline forbids it.
+            return FreshScreenshot()
 
         # 策略2: 后端 pyautogui 兜底（仅限本机连接，远程服务器截图无意义）
         is_local = False
@@ -276,7 +292,7 @@ class ProactiveMixin:
                     )
 
                 jpg_bytes = await asyncio.to_thread(_capture_and_compress)
-                if await ProactiveMixin._proactive_screenshot_privacy_enabled():
+                if await ProactiveMixin._proactive_screenshot_privacy_enabled(self):
                     return FreshScreenshot(declined=True)
                 b64_str = b64mod.b64encode(jpg_bytes).decode('utf-8')
                 logger.info("[%s] request_fresh_screenshot: 后端 pyautogui 兜底成功 (%dKB)", self.lanlan_name, len(jpg_bytes) // 1024)
@@ -287,7 +303,7 @@ class ProactiveMixin:
                 logger.warning("[%s] request_fresh_screenshot backend fallback failed: %s", self.lanlan_name, e2)
 
         # 采集异常也要复查隐私，避免异常被当作“允许回用旧图”的普通失败。
-        return FreshScreenshot(declined=await ProactiveMixin._proactive_screenshot_privacy_enabled())
+        return FreshScreenshot(declined=await ProactiveMixin._proactive_screenshot_privacy_enabled(self))
 
     def resolve_screenshot_request(
         self, b64: str, avatar_position: dict | None = None, *, declined: bool = False,
@@ -299,6 +315,12 @@ class ProactiveMixin:
         share frame arriving between this call and the requester waking up would
         silently swap the coordinates.
         """
+        if declined:
+            # A refusal arriving after the screenshot timeout still vetoes an
+            # image waiting on model creation; it does not disable future rounds.
+            self._proactive_vision_revocation_epoch = (
+                getattr(self, "_proactive_vision_revocation_epoch", 0) + 1
+            )
         if self._screenshot_future and not self._screenshot_future.done():
             # 顺序要紧：先落坐标再 resolve，等待方被唤醒时槽里一定是配对好的值。
             self._pending_screenshot_avatar_position = (

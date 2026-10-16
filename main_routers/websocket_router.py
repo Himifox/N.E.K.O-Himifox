@@ -1059,6 +1059,12 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                 _handle_ws_telemetry(message, lanlan_name=lanlan_name)
                 continue
 
+            if action == "proactive_vision_consent":
+                session_manager[lanlan_name].update_proactive_vision_consent(
+                    message.get("enabled")
+                )
+                continue
+
             if action == "goodbye_state":
                 active = bool(message.get("active"))
                 reason = str(message.get("reason") or ("goodbye" if active else "return")).strip().lower()[:64]

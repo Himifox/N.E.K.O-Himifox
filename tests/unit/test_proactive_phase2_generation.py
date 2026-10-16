@@ -502,3 +502,60 @@ async def test_client_creation_wait_rechecks_consent_and_closes_declined_client(
         read_mock.assert_not_awaited()
     else:
         assert read_mock.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('when', ['creation', 'read', 'reenable'])
+@pytest.mark.parametrize('use_vision', [True, False])
+async def test_live_revocation_is_sticky_for_vision_but_does_not_block_text(monkeypatch, when, use_vision):
+    import asyncio
+    from utils import preferences
+
+    manager = SimpleNamespace(enabled=True, epoch=0)
+    started, release = asyncio.Event(), asyncio.Event()
+    llm = SimpleNamespace(aclose=AsyncMock())
+    reads = 0
+
+    def revoke():
+        manager.enabled = when == 'reenable'
+        manager.epoch += 1
+
+    def live_consent_check():
+        return manager.enabled and manager.epoch == 0
+
+    async def read(*, strict):
+        nonlocal reads
+        assert strict is True
+        reads += 1
+        if when == 'read' and reads == 2:
+            revoke()
+        # The settings POST has not persisted yet.
+        return {'proactiveVisionEnabled': True}
+
+    async def create(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return llm
+
+    monkeypatch.setattr(preferences, 'aload_global_conversation_settings', read)
+    monkeypatch.setattr(generation, 'create_chat_llm_async', create)
+    config = generation.ProactiveModelConfig(
+        conversation_model='text-test', conversation_base_url=None,
+        conversation_api_key='synthetic', conversation_provider_type=None,
+        vision_model='vision-test', vision_api_key='synthetic',
+    )
+    task = asyncio.create_task(generation._make_proactive_llm(
+        config, use_vision=use_vision, live_consent_check=live_consent_check,
+    ))
+    await asyncio.wait_for(started.wait(), 1)
+    if when != 'read':
+        revoke()
+    release.set()
+    if use_vision:
+        with pytest.raises(PermissionError):
+            await task
+        llm.aclose.assert_awaited_once_with()
+    else:
+        assert await task is llm
+        assert reads == 0
+        llm.aclose.assert_not_awaited()

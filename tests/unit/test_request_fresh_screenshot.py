@@ -85,10 +85,11 @@ def test_ws_screenshot_already_small_stays_under_limit():
     ('reply_kind', 'allow_fallback', 'local', 'expected_capture', 'expected_declined'),
     [
         ('declined', True, True, False, True),
+        ('declined', False, True, False, True),
         ('empty', True, True, True, False),
         ('timeout', True, True, True, False),
-        ('empty', False, True, False, True),
-        ('timeout', False, True, False, True),
+        ('empty', False, True, False, False),
+        ('timeout', False, True, False, False),
         ('empty', True, False, False, False),
     ],
 )
@@ -193,3 +194,63 @@ def test_desktop_fallback_command_requires_a_boolean(value, expected):
     assert ProactiveChatCommand.from_payload({}).screenshot_allow_desktop_fallback is True
     command = ProactiveChatCommand.from_payload({'screenshot_allow_desktop_fallback': value})
     assert command.screenshot_allow_desktop_fallback is expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('value', [False, True, None, 'false', 0])
+def test_live_consent_is_strict_and_revocation_remains_visible_after_reenable(value):
+    manager = SimpleNamespace(_proactive_vision_enabled=True, _proactive_vision_revocation_epoch=0)
+    LLMSessionManager.update_proactive_vision_consent(manager, value)
+    assert manager._proactive_vision_enabled is (False if value is False else True)
+    assert manager._proactive_vision_revocation_epoch == int(value is False)
+    LLMSessionManager.update_proactive_vision_consent(manager, False)
+    LLMSessionManager.update_proactive_vision_consent(manager, False)
+    LLMSessionManager.update_proactive_vision_consent(manager, True)
+    assert manager._proactive_vision_revocation_epoch == 1
+    assert manager._proactive_vision_enabled is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('reply_kind', ['before', 'empty', 'image', 'backend_capture'])
+def test_live_revocation_blocks_capture_and_return_before_settings_persist(monkeypatch, reply_kind):
+    from unittest.mock import AsyncMock, Mock
+    from main_logic import core as core_facade
+    from main_logic.core import proactive
+
+    manager = SimpleNamespace(_screenshot_future=None, lanlan_name='Live',
+                              _proactive_vision_enabled=True, _proactive_vision_revocation_epoch=0)
+    monkeypatch.setattr(core_facade, 'aload_global_conversation_settings',
+                        AsyncMock(return_value={'proactiveVisionEnabled': True}))
+
+    def capture():
+        LLMSessionManager.update_proactive_vision_consent(manager, False)
+        return Image.new('RGB', (320, 180), (180, 80, 20))
+
+    capture_mock = Mock(side_effect=capture)
+    monkeypatch.setattr(proactive, 'capture_desktop_screenshot', capture_mock)
+
+    async def send(_payload):
+        if reply_kind in ('empty', 'image'):
+            LLMSessionManager.update_proactive_vision_consent(manager, False)
+        LLMSessionManager.resolve_screenshot_request(
+            manager, _png_b64(320, 180) if reply_kind == 'image' else '',
+        )
+
+    send_mock = AsyncMock(side_effect=send)
+    manager.websocket = SimpleNamespace(send_json=send_mock, client=SimpleNamespace(host='127.0.0.1'))
+    if reply_kind == 'before':
+        LLMSessionManager.update_proactive_vision_consent(manager, False)
+    result = asyncio.run(LLMSessionManager.request_fresh_screenshot(manager))
+    assert result.declined is True and not result.b64
+    assert capture_mock.call_count == int(reply_kind == 'backend_capture')
+    assert send_mock.await_count == int(reply_kind != 'before')
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('declined', [True, False])
+def test_late_reply_records_only_explicit_declines_after_future_is_gone(declined):
+    manager = SimpleNamespace(_screenshot_future=None, _proactive_vision_enabled=None,
+                              _proactive_vision_revocation_epoch=0)
+    LLMSessionManager.resolve_screenshot_request(manager, '', declined=declined)
+    assert manager._proactive_vision_revocation_epoch == int(declined)
+    assert manager._proactive_vision_enabled is None
