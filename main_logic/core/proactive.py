@@ -49,7 +49,7 @@ from main_logic.proactive_delivery import (
 from config import ANTI_REPEAT_EXEMPT_SOURCE_TAGS
 from utils.language_utils import normalize_language_code, get_global_language_full
 from utils.desktop_capture import capture_desktop_screenshot
-from utils.preferences import aload_global_conversation_settings
+import main_logic.core as _core_facade
 from uuid import uuid4
 from ._shared import (
     _VOICE_PROACTIVE_ACK_GRACE_S,
@@ -60,18 +60,18 @@ from ._shared import (
 from .callback_render import _build_callback_instruction, _select_callbacks_within_token_budget
 
 
-async def _proactive_screenshot_privacy_enabled() -> bool:
-    """Read current consent strictly: unreadable preferences must not grant capture."""
-    try:
-        settings = await aload_global_conversation_settings(strict=True)
-        return settings.get("proactiveVisionEnabled", True) is not True
-    except Exception as exc:
-        logger.warning("Proactive screenshot privacy check failed; declining capture: %s", exc)
-        return True
-
-
 class ProactiveMixin:
     """Proactive delivery methods (see module docstring)."""
+
+    @staticmethod
+    async def _proactive_screenshot_privacy_enabled() -> bool:
+        """Read current consent strictly: unreadable preferences must not grant capture."""
+        try:
+            settings = await _core_facade.aload_global_conversation_settings(strict=True)
+            return settings.get("proactiveVisionEnabled", True) is not True
+        except Exception as exc:
+            logger.warning("Proactive screenshot privacy check failed; declining capture: %s", exc)
+            return True
 
     @staticmethod
     def _terminal_callback_image_rejections() -> frozenset[str]:
@@ -198,7 +198,7 @@ class ProactiveMixin:
         also forbids desktop fallback if the frontend fails to answer.
         Neither path draws the avatar annotation; the caller owns that step.
         """
-        if await _proactive_screenshot_privacy_enabled():
+        if await ProactiveMixin._proactive_screenshot_privacy_enabled():
             return FreshScreenshot(declined=True)
 
         # 策略1: 前端 WebSocket 截图
@@ -237,7 +237,7 @@ class ProactiveMixin:
                             self.lanlan_name, comp_err,
                         )
                     # 用户可能在等待前端或压缩期间开启隐私；旧客户端也不能绕过它。
-                    if await _proactive_screenshot_privacy_enabled():
+                    if await ProactiveMixin._proactive_screenshot_privacy_enabled():
                         return FreshScreenshot(declined=True)
                     return FreshScreenshot(
                         b64=b64, source="websocket", avatar_position=ws_av_pos,
@@ -249,7 +249,7 @@ class ProactiveMixin:
                 self._pending_screenshot_avatar_position = None
 
         # 窗口约束随初始请求传来，前端超时/断线时也不能扩大到整桌面。
-        if not allow_backend_fallback or await _proactive_screenshot_privacy_enabled():
+        if not allow_backend_fallback or await ProactiveMixin._proactive_screenshot_privacy_enabled():
             return FreshScreenshot(declined=True)
 
         # 策略2: 后端 pyautogui 兜底（仅限本机连接，远程服务器截图无意义）
@@ -276,7 +276,7 @@ class ProactiveMixin:
                     )
 
                 jpg_bytes = await asyncio.to_thread(_capture_and_compress)
-                if await _proactive_screenshot_privacy_enabled():
+                if await ProactiveMixin._proactive_screenshot_privacy_enabled():
                     return FreshScreenshot(declined=True)
                 b64_str = b64mod.b64encode(jpg_bytes).decode('utf-8')
                 logger.info("[%s] request_fresh_screenshot: 后端 pyautogui 兜底成功 (%dKB)", self.lanlan_name, len(jpg_bytes) // 1024)
@@ -287,7 +287,7 @@ class ProactiveMixin:
                 logger.warning("[%s] request_fresh_screenshot backend fallback failed: %s", self.lanlan_name, e2)
 
         # 采集异常也要复查隐私，避免异常被当作“允许回用旧图”的普通失败。
-        return FreshScreenshot(declined=await _proactive_screenshot_privacy_enabled())
+        return FreshScreenshot(declined=await ProactiveMixin._proactive_screenshot_privacy_enabled())
 
     def resolve_screenshot_request(
         self, b64: str, avatar_position: dict | None = None, *, declined: bool = False,

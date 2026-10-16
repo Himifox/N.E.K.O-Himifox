@@ -96,11 +96,12 @@ def test_declines_and_window_bounds_preserve_only_legal_fallback(
     monkeypatch, reply_kind, allow_fallback, local, expected_capture, expected_declined,
 ):
     from unittest.mock import AsyncMock, Mock
+    from main_logic import core as core_facade
     from main_logic.core import proactive
 
     read = AsyncMock(return_value={'proactiveVisionEnabled': True})
     capture = Mock(return_value=Image.new('RGB', (320, 180), (20, 80, 180)))
-    monkeypatch.setattr(proactive, 'aload_global_conversation_settings', read)
+    monkeypatch.setattr(core_facade, 'aload_global_conversation_settings', read)
     monkeypatch.setattr(proactive, 'capture_desktop_screenshot', capture)
 
     async def run():
@@ -138,6 +139,7 @@ def test_declines_and_window_bounds_preserve_only_legal_fallback(
 @pytest.mark.parametrize('when', ['before', 'frontend_image', 'frontend_empty', 'backend_capture', 'backend_capture_error', 'read_error'])
 def test_privacy_changes_and_read_errors_do_not_return_images(monkeypatch, when):
     from unittest.mock import Mock
+    from main_logic import core as core_facade
     from main_logic.core import proactive
 
     allowed = when != 'before'
@@ -157,7 +159,7 @@ def test_privacy_changes_and_read_errors_do_not_return_images(monkeypatch, when)
         return Image.new('RGB', (320, 180), (180, 80, 20))
 
     capture_mock = Mock(side_effect=capture)
-    monkeypatch.setattr(proactive, 'aload_global_conversation_settings', read)
+    monkeypatch.setattr(core_facade, 'aload_global_conversation_settings', read)
     monkeypatch.setattr(proactive, 'capture_desktop_screenshot', capture_mock)
     sent = []
 
