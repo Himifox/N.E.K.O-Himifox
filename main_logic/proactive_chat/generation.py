@@ -409,10 +409,17 @@ async def _make_proactive_llm(
     use_vision: bool = False,
     disable_thinking: bool = True,
     live_consent_check: Callable[[], bool] | None = None,
+    round_is_current: Callable[[], bool] | None = None,
 ):
     """Create the configured proactive-chat model without owning lifecycle state."""
+    def require_current_round() -> None:
+        if round_is_current is not None and not round_is_current():
+            raise PermissionError("Proactive round retired")
+
+    require_current_round()
     if use_vision:
         await _check_proactive_vision_consent(live_consent_check)
+    require_current_round()
     if use_vision and model_config.has_vision_model:
         model = model_config.vision_model
         base_url = model_config.vision_base_url
@@ -441,11 +448,13 @@ async def _make_proactive_llm(
         api_key,
         **kwargs,
     )
-    if use_vision:
+    if use_vision or round_is_current is not None:
         # Client creation awaits a worker thread; consent may change while it runs.
         # The caller has not entered the client context yet, so denial owns cleanup.
         try:
-            await _check_proactive_vision_consent(live_consent_check)
+            if use_vision:
+                await _check_proactive_vision_consent(live_consent_check)
+            require_current_round()
         except BaseException:
             with suppress(Exception):
                 await llm.aclose()
@@ -762,6 +771,7 @@ async def _run_phase2_generation(
     music_cooldown: bool,
     log: logging.Logger | None = None,
     vision_consent_epoch: int | None = None,
+    round_is_current: Callable[[], bool] | None = None,
 ) -> Phase2GuardedOutput:
     """Own Phase 2 messages, model stream, and output guards."""
     active_logger = log or logger
@@ -813,6 +823,7 @@ async def _run_phase2_generation(
 
     make_llm = partial(
         _make_proactive_llm, model_config, live_consent_check=live_consent_check,
+        round_is_current=round_is_current,
     )
     silence_since_before_generation = _proactive_silence_since(mgr)
     generated = await _generate_phase2_stream(

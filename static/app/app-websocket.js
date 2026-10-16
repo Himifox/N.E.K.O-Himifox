@@ -5337,6 +5337,15 @@
                 // -------- request_screenshot (existing path, unrelated to capture bridge) --------
                 } else if (response.type === 'request_screenshot') {
                     (async function () {
+                        function sendScreenshotReply(reply) {
+                            if (!S.socket || S.socket.readyState !== WebSocket.OPEN) return;
+                            // Echo the ID for every reply, including privacy/tutorial
+                            // declines and the legacy capture-function path.
+                            if (typeof response.request_id === 'string' && response.request_id) {
+                                reply.request_id = response.request_id;
+                            }
+                            S.socket.send(JSON.stringify(reply));
+                        }
                         function replySuppressedScreenshot() {
                             var tutorialBlocked = typeof window.isNekoHomeTutorialProactiveSuppressed === 'function'
                                 && window.isNekoHomeTutorialProactiveSuppressed();
@@ -5345,9 +5354,7 @@
                                 ? !window.appProactive.isProactiveVisionEnabledNow()
                                 : S.proactiveVisionEnabled === false;
                             if (!tutorialBlocked && !privacyBlocked) return false;
-                            if (S.socket && S.socket.readyState === WebSocket.OPEN) {
-                                S.socket.send(JSON.stringify({ action: 'screenshot_response', data: '', declined: true }));
-                            }
+                            sendScreenshotReply({ action: 'screenshot_response', data: '', declined: true });
                             return true;
                         }
                         try {
@@ -5361,9 +5368,7 @@
                                 && typeof window.appProactive.captureProactiveChatScreenshotWithSource === 'function') {
                                 var shot = await window.appProactive.captureProactiveChatScreenshotWithSource();
                                 if (shot && shot.declined === true) {
-                                    if (S.socket && S.socket.readyState === WebSocket.OPEN) {
-                                        S.socket.send(JSON.stringify({ action: 'screenshot_response', data: '', declined: true }));
-                                    }
+                                    sendScreenshotReply({ action: 'screenshot_response', data: '', declined: true });
                                     return;
                                 }
                                 dataUrl = shot && shot.dataUrl ? shot.dataUrl : null;
@@ -5400,7 +5405,7 @@
                                 if (avatarPos) {
                                     respMsg.avatar_position = avatarPos;
                                 }
-                                S.socket.send(JSON.stringify(respMsg));
+                                sendScreenshotReply(respMsg);
                             }
                         } catch (e2) {
                             // 抛错也可能发生在权限撤回之后，不能静默超时再由后端补截。

@@ -777,6 +777,50 @@ async def test_service_missing_manager_returns_domain_result() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('exit_kind', ['cancel', 'timeout', 'error', 'busy'])
+async def test_service_retires_only_its_screenshot_id_on_abnormal_exit(monkeypatch, exit_kind):
+    from main_logic.session_state import SessionStateMachine
+    from utils import preferences
+
+    state_machine = SessionStateMachine('Yui')
+    manager = SimpleNamespace(is_active=False, state=state_machine,
+                              _proactive_screenshot_request_id=None)
+    if exit_kind == 'busy':
+        await state_machine.try_start_proactive(session=None)
+        manager._proactive_screenshot_request_id = 'running-round'
+    monkeypatch.setattr(preferences, 'ais_privacy_mode_enabled', AsyncMock(return_value=False))
+    observed_ids = []
+
+    def interrupt(_privacy):
+        observed_ids.append(manager._proactive_screenshot_request_id)
+        if exit_kind == 'cancel':
+            raise asyncio.CancelledError()
+        if exit_kind == 'timeout':
+            raise asyncio.TimeoutError()
+        raise RuntimeError('synthetic service interruption')
+
+    monkeypatch.setattr(service, '_should_fetch_activity_snapshot', interrupt)
+    pending = service.handle_proactive_chat(
+        contracts.ProactiveChatCommand(lanlan_name='Yui'),
+        config_manager=SimpleNamespace(), session_manager={'Yui': manager},
+        character_data=_CHARACTER_DATA, game_route_active_for=lambda _name: False,
+        break_config_manager_provider=lambda: SimpleNamespace(),
+        run_mini_game_invite_short_circuit=AsyncMock(),
+        push_mini_game_invite_options=AsyncMock(), push_mini_game_invite_resolved=AsyncMock(),
+    )
+    if exit_kind == 'cancel':
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    else:
+        result = await pending
+        assert result.status_code == {'timeout': 504, 'error': 500, 'busy': 409}[exit_kind]
+    assert manager._proactive_screenshot_request_id == ('running-round' if exit_kind == 'busy' else None)
+    assert state_machine.phase.value == ('phase1' if exit_kind == 'busy' else 'idle')
+    assert bool(observed_ids) is (exit_kind != 'busy')
+    assert all(observed_ids)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     (
         "request_language",

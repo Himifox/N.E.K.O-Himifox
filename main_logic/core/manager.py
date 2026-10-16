@@ -116,6 +116,7 @@ class LLMSessionManager(
         self.websocket_lock = None  # websocket操作的共享锁，由main_server设置
         self._bg_tasks: set = set()  # 防止 fire-and-forget 任务被 GC 回收
         self._screenshot_future: asyncio.Future | None = None
+        self._proactive_screenshot_request_id: str | None = None
         # Live browser consent can arrive before the settings POST is persisted.
         self._proactive_vision_enabled: bool | None = None
         self._proactive_vision_revocation_epoch: int = 0

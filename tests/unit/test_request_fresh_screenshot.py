@@ -40,8 +40,11 @@ def test_ws_screenshot_is_downscaled_to_720p():
         async def _send_json(payload):
             # send_json 在 create_future 之后、wait_for 之前被 await，
             # 此处直接 resolve future，模拟前端回传截图。
-            assert payload == {"type": "request_screenshot"}
-            LLMSessionManager.resolve_screenshot_request(fake, big_b64)
+            assert payload['type'] == 'request_screenshot'
+            assert payload['request_id']
+            LLMSessionManager.resolve_screenshot_request(
+                fake, big_b64, request_id=payload['request_id'],
+            )
 
         fake.websocket = SimpleNamespace(send_json=_send_json)
         return (await LLMSessionManager.request_fresh_screenshot(fake, timeout=3.0)).b64
@@ -81,6 +84,7 @@ def test_ws_screenshot_already_small_stays_under_limit():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize('echo_id', [True, False])
 @pytest.mark.parametrize(
     ('reply_kind', 'allow_fallback', 'local', 'expected_capture', 'expected_declined'),
     [
@@ -94,7 +98,7 @@ def test_ws_screenshot_already_small_stays_under_limit():
     ],
 )
 def test_declines_and_window_bounds_preserve_only_legal_fallback(
-    monkeypatch, reply_kind, allow_fallback, local, expected_capture, expected_declined,
+    monkeypatch, echo_id, reply_kind, allow_fallback, local, expected_capture, expected_declined,
 ):
     from unittest.mock import AsyncMock, Mock
     from main_logic import core as core_facade
@@ -114,6 +118,7 @@ def test_declines_and_window_bounds_preserve_only_legal_fallback(
                 LLMSessionManager.resolve_screenshot_request(
                     fake, 'IGNORE_THIS_IMAGE' if reply_kind == 'declined' else '',
                     declined=reply_kind == 'declined',
+                    request_id=_payload['request_id'] if echo_id else None,
                 )
 
         fake.websocket = SimpleNamespace(
@@ -250,7 +255,214 @@ def test_live_revocation_blocks_capture_and_return_before_settings_persist(monke
 @pytest.mark.parametrize('declined', [True, False])
 def test_late_reply_records_only_explicit_declines_after_future_is_gone(declined):
     manager = SimpleNamespace(_screenshot_future=None, _proactive_vision_enabled=None,
+                              _proactive_screenshot_request_id='current',
                               _proactive_vision_revocation_epoch=0)
-    LLMSessionManager.resolve_screenshot_request(manager, '', declined=declined)
+    LLMSessionManager.resolve_screenshot_request(
+        manager, '', declined=declined, request_id='current',
+    )
     assert manager._proactive_vision_revocation_epoch == int(declined)
     assert manager._proactive_vision_enabled is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('reply_id', ['current', 'previous', None, '', 42])
+@pytest.mark.parametrize('declined', [True, False])
+@pytest.mark.parametrize('waiting', [True, False])
+def test_screenshot_reply_correlation_precedes_all_side_effects(reply_id, declined, waiting):
+    async def run():
+        future = asyncio.get_running_loop().create_future() if waiting else None
+        original_position = {'x': 1}
+        position = {'x': 2}
+        manager = SimpleNamespace(
+            _screenshot_future=future, _proactive_screenshot_request_id='current',
+            _proactive_vision_revocation_epoch=0, _avatar_position=original_position,
+            _pending_screenshot_avatar_position=original_position,
+        )
+        LLMSessionManager.resolve_screenshot_request(
+            manager, 'image', position, declined=declined, request_id=reply_id,
+        )
+        accepted = reply_id in ('current', None)
+        assert manager._proactive_vision_revocation_epoch == int(accepted and declined)
+        assert manager._avatar_position == (position if accepted and waiting else original_position)
+        assert manager._pending_screenshot_avatar_position == (
+            position if accepted and waiting else original_position
+        )
+        if waiting:
+            assert future.done() is accepted
+            if accepted:
+                assert future.result().b64 == ('' if declined else 'image')
+                assert future.result().declined is declined
+            else:
+                future.cancel()
+
+    asyncio.run(run())
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('reply_id', ['finished', None])
+def test_finished_round_replies_do_not_revoke_or_replace_positions(reply_id):
+    manager = SimpleNamespace(
+        _screenshot_future=None, _proactive_screenshot_request_id=None,
+        _proactive_vision_revocation_epoch=0, _avatar_position={'x': 1},
+    )
+    LLMSessionManager.resolve_screenshot_request(
+        manager, '', {'x': 2}, declined=True, request_id=reply_id,
+    )
+    assert manager._proactive_vision_revocation_epoch == 0
+    assert manager._avatar_position == {'x': 1}
+
+
+@pytest.mark.unit
+def test_screenshot_timeout_preserves_id_for_current_round_late_decline(monkeypatch):
+    from unittest.mock import AsyncMock
+    from main_logic import core as core_facade
+
+    monkeypatch.setattr(core_facade, 'aload_global_conversation_settings',
+                        AsyncMock(return_value={'proactiveVisionEnabled': True}))
+
+    async def run():
+        manager = SimpleNamespace(
+            _screenshot_future=None, _proactive_screenshot_request_id='current',
+            _proactive_vision_revocation_epoch=0, lanlan_name='Repro',
+            websocket=SimpleNamespace(send_json=AsyncMock()),
+        )
+        result = await LLMSessionManager.request_fresh_screenshot(
+            manager, timeout=0.001, allow_backend_fallback=False, request_id='current',
+        )
+        assert not result.declined and not result.b64
+        assert manager._screenshot_future is None
+        assert manager._proactive_screenshot_request_id == 'current'
+        LLMSessionManager.resolve_screenshot_request(
+            manager, '', declined=True, request_id='current',
+        )
+        assert manager._proactive_vision_revocation_epoch == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.unit
+def test_lifecycle_retires_screenshot_id_before_idle_and_preserves_new_owner():
+    from unittest.mock import AsyncMock
+    from main_logic.proactive_chat.delivery import ProactiveLifecycle
+
+    async def run():
+        manager = SimpleNamespace(_proactive_screenshot_request_id='first')
+
+        async def fire(_event, **payload):
+            assert payload['round_id'] == 'first'
+            assert manager._proactive_screenshot_request_id is None
+            manager._proactive_screenshot_request_id = 'second'
+
+        manager.state = SimpleNamespace(fire=AsyncMock(side_effect=fire))
+        lifecycle = ProactiveLifecycle(manager, 'DONE', 'Repro', screenshot_request_id='first')
+        await lifecycle.safe_done()
+        lifecycle.clear_screenshot_request()
+        await lifecycle.safe_done()
+        assert manager._proactive_screenshot_request_id == 'second'
+        assert manager.state.fire.await_count == 1
+        # A concurrent rejected request never owns the running round's ID.
+        ProactiveLifecycle(manager, 'DONE', 'Repro').clear_screenshot_request()
+        assert manager._proactive_screenshot_request_id == 'second'
+
+    asyncio.run(run())
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('when', ['entry', 'privacy_read'])
+def test_retired_screenshot_request_cannot_borrow_replacement_id(monkeypatch, when):
+    from unittest.mock import AsyncMock, Mock
+    from main_logic import core as core_facade
+    from main_logic.core import proactive
+
+    async def run():
+        waiting = asyncio.get_running_loop().create_future()
+        manager = SimpleNamespace(
+            _screenshot_future=waiting, _proactive_screenshot_request_id='old',
+            state=SimpleNamespace(proactive_round_id='old'), lanlan_name='Repro',
+            websocket=SimpleNamespace(send_json=AsyncMock()),
+        )
+
+        def replace():
+            manager._proactive_screenshot_request_id = 'new'
+            manager.state.proactive_round_id = 'new'
+
+        async def read(**_kwargs):
+            replace()
+            return {'proactiveVisionEnabled': True}
+
+        read_mock = AsyncMock(side_effect=read)
+        capture = Mock()
+        monkeypatch.setattr(core_facade, 'aload_global_conversation_settings', read_mock)
+        monkeypatch.setattr(proactive, 'capture_desktop_screenshot', capture)
+        if when == 'entry':
+            replace()
+        result = await LLMSessionManager.request_fresh_screenshot(manager, request_id='old')
+        assert result.declined and not result.b64
+        assert manager._proactive_screenshot_request_id == 'new'
+        assert manager._screenshot_future is waiting and not waiting.done()
+        assert read_mock.await_count == int(when == 'privacy_read')
+        manager.websocket.send_json.assert_not_awaited()
+        capture.assert_not_called()
+        waiting.cancel()
+
+    asyncio.run(run())
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('outcome', ['reply', 'timeout', 'cancel', 'send_error'])
+def test_old_screenshot_cleanup_cannot_clear_new_future_or_trigger_fallback(monkeypatch, outcome):
+    from unittest.mock import AsyncMock, Mock
+    from main_logic import core as core_facade
+    from main_logic.core import proactive
+    from main_logic.core._shared import FreshScreenshot
+
+    monkeypatch.setattr(core_facade, 'aload_global_conversation_settings',
+                        AsyncMock(return_value={'proactiveVisionEnabled': True}))
+    capture = Mock()
+    monkeypatch.setattr(proactive, 'capture_desktop_screenshot', capture)
+
+    async def run():
+        started, release = asyncio.Event(), asyncio.Event()
+        manager = SimpleNamespace(
+            _screenshot_future=None, _proactive_screenshot_request_id='old',
+            _proactive_vision_revocation_epoch=0, lanlan_name='Repro',
+            state=SimpleNamespace(proactive_round_id='old'),
+        )
+
+        async def send(payload):
+            assert payload['request_id'] == 'old'
+            started.set()
+            await release.wait()
+            if outcome == 'send_error':
+                raise OSError('synthetic transport error')
+
+        manager.websocket = SimpleNamespace(send_json=send, client=SimpleNamespace(host='127.0.0.1'))
+        task = asyncio.create_task(LLMSessionManager.request_fresh_screenshot(
+            manager, request_id='old', timeout=0.005,
+        ))
+        await started.wait()
+        old_future = manager._screenshot_future
+        new_future = asyncio.get_running_loop().create_future()
+        manager._proactive_screenshot_request_id = 'new'
+        manager.state.proactive_round_id = 'new'
+        manager._screenshot_future = new_future
+        manager._pending_screenshot_avatar_position = {'x': 2}
+        if outcome == 'reply':
+            old_future.set_result(FreshScreenshot(b64='queued old frame'))
+        if outcome == 'cancel':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            release.set()
+            result = await task
+            assert result.declined and not result.b64
+        assert manager._screenshot_future is new_future and not new_future.done()
+        assert manager._pending_screenshot_avatar_position == {'x': 2}
+        assert manager._proactive_vision_revocation_epoch == 0
+        capture.assert_not_called()
+        LLMSessionManager.resolve_screenshot_request(manager, '', declined=True, request_id='new')
+        assert new_future.result().declined
+        assert manager._proactive_vision_revocation_epoch == 1
+
+    asyncio.run(run())

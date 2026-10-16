@@ -1539,10 +1539,10 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                 if not (av_pos and isinstance(av_pos, dict)):
                     # 前端明确说这张图不该叠（窗口截图 / 相机 / Avatar 已折叠 / 多屏）。
                     av_pos = None
-                session_manager[lanlan_name]._avatar_position = av_pos
                 # 坐标随图一起交给等待方，不让它去读会被别的帧改写的 _avatar_position。
                 session_manager[lanlan_name].resolve_screenshot_request(
                     b64, av_pos, declined=declined,
+                    request_id=message.get("request_id"),
                 )
 
             elif action == "greeting_check":

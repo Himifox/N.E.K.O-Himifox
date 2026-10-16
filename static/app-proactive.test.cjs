@@ -194,12 +194,58 @@ test('request_screenshot rechecks tutorial suppression immediately before sendin
             };
             await vm.runInNewContext(websocketSource.slice(start, end), {
                 window, S: { socket: { readyState: 1, send(value) { sent.push(value); } } },
-                WebSocket: { OPEN: 1 }, console
+                response: { request_id: 'current-round' }, WebSocket: { OPEN: 1 }, console
             });
             assert.equal(sent.length, 1, 'always resolve the backend screenshot request');
             assert.equal(JSON.parse(sent[0]).data, phase === 'none' ? 'FRAME' : '');
             assert.equal(JSON.parse(sent[0]).declined === true, phase !== 'none');
+            assert.equal(JSON.parse(sent[0]).request_id, 'current-round');
             assert.equal(captures, phase === 'before' ? 0 : 1);
+        }
+    }
+});
+
+test('screenshot replies correlate all paths and preserve legacy-server and ordinary failure contracts', async () => {
+    const websocketSource = fs.readFileSync(path.join(__dirname, 'app/app-websocket.js'), 'utf8');
+    const branch = websocketSource.indexOf("response.type === 'request_screenshot'");
+    const start = websocketSource.indexOf('(async function () {', branch);
+    const end = websocketSource.indexOf('})();', start) + 5;
+    for (const requestId of [undefined, 'current-round']) {
+        for (const route of ['success', 'declined', 'error-privacy', 'error-tutorial', 'error-normal', 'empty', 'legacy-success', 'closed']) {
+            const sent = [];
+            let tutorial = false;
+            const state = {
+                proactiveVisionEnabled: true,
+                socket: { readyState: route === 'closed' ? 3 : 1, send(raw) { sent.push(JSON.parse(raw)); } }
+            };
+            const window = {
+                isNekoHomeTutorialProactiveSuppressed: () => tutorial,
+                captureProactiveChatScreenshot: async () => 'LEGACY',
+                appProactive: {
+                    captureProactiveChatScreenshotWithSource: async () => {
+                        if (route === 'declined') return { dataUrl: 'IGNORE', declined: true };
+                        if (route.startsWith('error-')) {
+                            if (route === 'error-privacy') state.proactiveVisionEnabled = false;
+                            if (route === 'error-tutorial') tutorial = true;
+                            throw new Error('synthetic capture failure');
+                        }
+                        return { dataUrl: route === 'empty' ? null : 'FRAME', captureType: 'screen' };
+                    }
+                }
+            };
+            if (route === 'legacy-success') delete window.appProactive;
+            await vm.runInNewContext(websocketSource.slice(start, end), {
+                window, S: state, response: { request_id: requestId },
+                WebSocket: { OPEN: 1 }, console: { warn() {} }
+            });
+            const replies = !['error-normal', 'empty', 'closed'].includes(route);
+            assert.equal(sent.length, replies ? 1 : 0, route);
+            if (!replies) continue;
+            assert.equal(sent[0].request_id, requestId, route);
+            assert.equal(Object.hasOwn(sent[0], 'request_id'), requestId !== undefined, route);
+            const declined = ['declined', 'error-privacy', 'error-tutorial'].includes(route);
+            assert.equal(sent[0].declined === true, declined, route);
+            assert.equal(sent[0].data, declined ? '' : (route === 'legacy-success' ? 'LEGACY' : 'FRAME'), route);
         }
     }
 });
@@ -387,7 +433,7 @@ test('request_screenshot declines privacy before capture and after an async capt
         };
         await vm.runInNewContext(websocketSource.slice(start, end), {
             window, S: { socket: { readyState: 1, send(raw) { sent.push(JSON.parse(raw)); } } },
-            WebSocket: { OPEN: 1 }, console
+            response: {}, WebSocket: { OPEN: 1 }, console
         });
         assert.equal(sent.length, 1);
         assert.equal(sent[0].declined === true, phase !== 'none');
@@ -405,7 +451,7 @@ test('request_screenshot forwards a remembered-window decline instead of waiting
     await vm.runInNewContext(websocketSource.slice(start, end), {
         window: { appProactive: { captureProactiveChatScreenshotWithSource: async () => ({ dataUrl: null, declined: true }) } },
         S: { socket: { readyState: 1, send(raw) { sent.push(JSON.parse(raw)); } } },
-        WebSocket: { OPEN: 1 }, console
+        response: {}, WebSocket: { OPEN: 1 }, console
     });
     assert.deepEqual(sent, [{ action: 'screenshot_response', data: '', declined: true }]);
 });
@@ -435,7 +481,7 @@ test('screenshot exceptions and legacy replies keep privacy separate from techni
                 };
                 state.socket = { readyState: 1, send(raw) { sent.push(JSON.parse(raw)); } };
                 await vm.runInNewContext(websocketSource.slice(start, end), {
-                    window, S: state, WebSocket: { OPEN: 1 }, console: { warn() {} }
+                    window, S: state, response: {}, WebSocket: { OPEN: 1 }, console: { warn() {} }
                 });
                 if (blocked) {
                     assert.deepEqual(sent, [{ action: 'screenshot_response', data: '', declined: true }]);

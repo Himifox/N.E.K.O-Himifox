@@ -559,3 +559,47 @@ async def test_live_revocation_is_sticky_for_vision_but_does_not_block_text(monk
         assert await task is llm
         assert reads == 0
         llm.aclose.assert_not_awaited()
+@pytest.mark.asyncio
+@pytest.mark.parametrize('use_vision,when', [
+    (True, 'before'), (False, 'before'), (True, 'read'),
+    (True, 'creation'), (False, 'creation'),
+])
+async def test_retired_round_cannot_send_vision_or_text_after_model_creation(monkeypatch, use_vision, when):
+    from utils import preferences
+
+    current = when != 'before'
+    client = SimpleNamespace(aclose=AsyncMock())
+
+    async def read(**_kwargs):
+        nonlocal current
+        if when == 'read':
+            current = False
+        return {'proactiveVisionEnabled': True}
+
+    async def create(*_args, **_kwargs):
+        nonlocal current
+        current = False
+        return client
+
+    factory = AsyncMock(side_effect=create)
+    monkeypatch.setattr(preferences, 'aload_global_conversation_settings', AsyncMock(side_effect=read))
+    monkeypatch.setattr(generation, 'create_chat_llm_async', factory)
+    config = generation.ProactiveModelConfig(
+        conversation_model='text-test', conversation_base_url=None,
+        conversation_api_key='synthetic', conversation_provider_type=None,
+        vision_model='vision-test', vision_api_key='synthetic',
+    )
+    with pytest.raises(PermissionError):
+        await generation._make_proactive_llm(
+            config, use_vision=use_vision, round_is_current=lambda: current,
+        )
+    assert factory.await_count == int(when == 'creation')
+    assert client.aclose.await_count == int(when == 'creation')
+
+
+def test_retired_stream_cleanup_does_not_target_replacement_before_it_has_a_speech_id():
+    from main_logic.session_state import SessionStateMachine
+    from main_logic.proactive_chat.state import _proactive_turn_still_owned
+
+    manager = SimpleNamespace(current_speech_id='old-speech', state=SessionStateMachine('test'))
+    assert not _proactive_turn_still_owned(manager, 'old-speech')

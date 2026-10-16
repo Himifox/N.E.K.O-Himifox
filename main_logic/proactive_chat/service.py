@@ -677,8 +677,11 @@ async def handle_proactive_chat(
             state_event=_SE.PROACTIVE_DONE,
             lanlan_name=lanlan_name,
             log=logger,
+            screenshot_request_id=uuid4().hex,
         )
-        proactive_started = await mgr.state.try_start_proactive(session=probe_session)
+        proactive_started = await mgr.state.try_start_proactive(
+            session=probe_session, round_id=lifecycle.screenshot_request_id,
+        )
         entry_result = _decide_busy_entry_guard(
             proactive_started,
             state_snapshot=(None if proactive_started else mgr.state.snapshot()),
@@ -692,11 +695,16 @@ async def handle_proactive_chat(
                 status_code=entry_result.status_code,
             )
 
+        mgr._proactive_screenshot_request_id = lifecycle.screenshot_request_id
+
         async def _end_proactive(
             result: ProactiveChatResult,
         ) -> ProactiveChatResult:
             """Finalize every normal/short-circuit service exit."""
             return await lifecycle.finalize(result)
+
+        def _round_preempted() -> bool:
+            return not lifecycle.owns_round() or mgr.state.is_proactive_preempted()
 
         def _proactive_preempted_json(where: str) -> dict:
             # 细粒度的 state 快照留 debug；面向排查的"本轮未发起 + 原因"由统一
@@ -1376,7 +1384,7 @@ async def handle_proactive_chat(
             )
 
         # Phase 1 preempt check：信息源并行 fetch 完，正式进入 LLM 前先瞄一眼
-        if mgr.state.is_proactive_preempted():
+        if _round_preempted():
             return await _end_proactive(
                 ProactiveChatResult(body=_proactive_preempted_json("phase1_post_fetch"))
             )
@@ -1449,7 +1457,7 @@ async def handle_proactive_chat(
         # Phase 1 preempt check：memory_server new_dialog 是 phase1 里首次大 await
         # （httpx timeout 5s）。用户在这期间打断只能等超时才有下一次 check，
         # 这里补一刀。
-        if mgr.state.is_proactive_preempted():
+        if _round_preempted():
             return await _end_proactive(
                 ProactiveChatResult(
                     body=_proactive_preempted_json("phase1_post_memory")
@@ -1531,7 +1539,7 @@ async def handle_proactive_chat(
         # Phase 1 preempt check：followup GET(5s) 是一段可能拖久的 await，
         # 整段裸跑会让用户打断后继续跑完 LLM 配置和后续步骤，再到 pre-LLM
         # check 才识破。这里补一刀。
-        if mgr.state.is_proactive_preempted():
+        if _round_preempted():
             return await _end_proactive(
                 ProactiveChatResult(
                     body=_proactive_preempted_json("phase1_post_reflect")
@@ -1784,7 +1792,7 @@ async def handle_proactive_chat(
         if has_web_task or has_music_task or has_meme_task:
             # Phase 1 preempt check：拨号前最后一次检查。大头 LLM 调用即将开始，
             # 此后等待期间用户抢占只能靠流结束后的兜底识别。
-            if mgr.state.is_proactive_preempted():
+            if _round_preempted():
                 return await _end_proactive(
                     ProactiveChatResult(
                         body=_proactive_preempted_json("phase1_pre_llm")
@@ -1882,7 +1890,7 @@ async def handle_proactive_chat(
         ) or (has_meme_task and not unified_parsed.get("meme_pass"))
         if needs_phase1_followups:
             # Phase 1 preempt check：unified LLM 刚回，music/meme 后置 fetch 前再瞄
-            if mgr.state.is_proactive_preempted():
+            if _round_preempted():
                 return await _end_proactive(
                     ProactiveChatResult(
                         body=_proactive_preempted_json("phase1_post_llm")
@@ -1942,7 +1950,7 @@ async def handle_proactive_chat(
                             f"[{lanlan_name}]- Phase 1 表情包候选去重命中，跳过: {meme_title[:30]}"
                         )
                         continue
-                    if mgr.state.is_proactive_preempted():
+                    if _round_preempted():
                         return await _end_proactive(
                             ProactiveChatResult(
                                 body=_proactive_preempted_json(
@@ -1953,7 +1961,7 @@ async def handle_proactive_chat(
                     moderation = await moderate_meme_image_url(
                         meme_url, fail_closed=False
                     )
-                    if mgr.state.is_proactive_preempted():
+                    if _round_preempted():
                         return await _end_proactive(
                             ProactiveChatResult(
                                 body=_proactive_preempted_json(
@@ -1994,7 +2002,7 @@ async def handle_proactive_chat(
                                 _MEME_PROXY_CANDIDATE_CHECK_LIMIT,
                             )
                             break
-                        if mgr.state.is_proactive_preempted():
+                        if _round_preempted():
                             return await _end_proactive(
                                 ProactiveChatResult(
                                     body=_proactive_preempted_json(
@@ -2006,7 +2014,7 @@ async def handle_proactive_chat(
                         proxy_ok, proxy_reason = (
                             await meme_proxy_candidate_fetchable(meme_url)
                         )
-                        if mgr.state.is_proactive_preempted():
+                        if _round_preempted():
                             return await _end_proactive(
                                 ProactiveChatResult(
                                     body=_proactive_preempted_json(
@@ -2068,7 +2076,7 @@ async def handle_proactive_chat(
             )
 
         # Phase 1 preempt check：topic assembly 完，进入 Phase 2 前最后一次瞄
-        if mgr.state.is_proactive_preempted():
+        if _round_preempted():
             return await _end_proactive(
                 ProactiveChatResult(body=_proactive_preempted_json("phase1_pre_phase2"))
             )
@@ -2082,7 +2090,7 @@ async def handle_proactive_chat(
         music_topic = phase1_decision.music_topic
         primary_channel = phase1_decision.primary_channel
         if selected_web_link:
-            if mgr.state.is_proactive_preempted():
+            if _round_preempted():
                 return await _end_proactive(
                     ProactiveChatResult(
                         body=_proactive_preempted_json(
@@ -2095,7 +2103,7 @@ async def handle_proactive_chat(
                     selected_web_link,
                     fallback_topic=web_topic,
                     language=proactive_lang,
-                    is_preempted=mgr.state.is_proactive_preempted,
+                    is_preempted=_round_preempted,
                 )
             except SelectedWebCandidatePreempted:
                 return await _end_proactive(
@@ -2105,7 +2113,7 @@ async def handle_proactive_chat(
                         )
                     )
                 )
-            if mgr.state.is_proactive_preempted():
+            if _round_preempted():
                 return await _end_proactive(
                     ProactiveChatResult(
                         body=_proactive_preempted_json(
@@ -2141,7 +2149,12 @@ async def handle_proactive_chat(
             fresh = await mgr.request_fresh_screenshot(
                 timeout=3.0,
                 allow_backend_fallback=command.screenshot_allow_desktop_fallback,
+                request_id=lifecycle.screenshot_request_id,
             )
+            if _round_preempted():
+                return await _end_proactive(ProactiveChatResult(
+                    body=_proactive_preempted_json("phase1_post_screenshot"),
+                ))
             if fresh.b64:
                 fresh_b64 = fresh.b64
                 # 判据见 _resolve_phase2_avatar_position：WS 路径不给坐标 = 前端明确
@@ -2361,7 +2374,7 @@ async def handle_proactive_chat(
         # 用户轮次的 sid —— 即使 SM 的 PROACTIVE_CLAIM 在 _preempted=True 时不
         # 回写 proactive_sid，mgr.current_speech_id 已经被物理换掉，用户的
         # 回复 TTS 会被错贴上一个陌生 sid。
-        if mgr.state.is_proactive_preempted():
+        if _round_preempted():
             return await _end_proactive(
                 ProactiveChatResult(
                     body=_proactive_preempted_json("phase1_pre_prepare")
@@ -2369,7 +2382,9 @@ async def handle_proactive_chat(
             )
 
         # --- 前置检查：用户是否空闲、WebSocket 是否在线、session 是否可用 ---
-        if not await mgr.prepare_proactive_delivery(min_idle_secs=10.0):
+        if not await mgr.prepare_proactive_delivery(
+            min_idle_secs=10.0, round_id=lifecycle.screenshot_request_id,
+        ):
             return await _end_proactive(
                 ProactiveChatResult(
                     body={
@@ -2390,6 +2405,7 @@ async def handle_proactive_chat(
             mgr,
             proactive_sid,
             log=logger,
+            round_id=lifecycle.screenshot_request_id,
         ):
             return await _end_proactive(
                 ProactiveChatResult(
@@ -2417,6 +2433,7 @@ async def handle_proactive_chat(
         guarded_output = await _run_phase2_generation(
             mgr=mgr,
             vision_consent_epoch=vision_consent_epoch,
+            round_is_current=lifecycle.owns_round,
             proactive_sid=proactive_sid,
             model_config=model_config,
             lanlan_name=lanlan_name,
@@ -2436,6 +2453,10 @@ async def handle_proactive_chat(
             music_cooldown=music_cooldown,
             log=logger,
         )
+        if _round_preempted():
+            return await _end_proactive(ProactiveChatResult(
+                body=_proactive_preempted_json("phase2_post_generation"),
+            ))
         if guarded_output.result is not None:
             return await _end_proactive(
                 ProactiveChatResult(body=guarded_output.result.body)
@@ -2516,6 +2537,10 @@ async def handle_proactive_chat(
             )
         )
 
+    except asyncio.CancelledError:
+        if lifecycle is not None:
+            await lifecycle.safe_done()
+        raise
     except asyncio.TimeoutError:
         logger.error("主动搭话超时")
         if lifecycle is not None:
@@ -2539,3 +2564,8 @@ async def handle_proactive_chat(
             ),
             status_code=500,
         )
+    finally:
+        # Also retire the ID on cancellation; a delayed cleanup cannot clear
+        # the ID of a newer round admitted after PROACTIVE_DONE.
+        if lifecycle is not None:
+            lifecycle.clear_screenshot_request()
