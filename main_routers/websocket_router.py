@@ -1525,7 +1525,8 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                 resolve_capture_response(lanlan_name, message)
 
             elif action == "screenshot_response":
-                raw = message.get("data", "")
+                declined = message.get("declined") is True
+                raw = "" if declined else message.get("data", "")
                 b64 = raw.split(",", 1)[1] if "," in raw else raw
                 # Extract and store avatar position metadata (paired with fresh screenshot)
                 av_pos = message.get("avatar_position")
@@ -1534,7 +1535,9 @@ async def websocket_endpoint(websocket: WebSocket, lanlan_name: str):
                     av_pos = None
                 session_manager[lanlan_name]._avatar_position = av_pos
                 # 坐标随图一起交给等待方，不让它去读会被别的帧改写的 _avatar_position。
-                session_manager[lanlan_name].resolve_screenshot_request(b64, av_pos)
+                session_manager[lanlan_name].resolve_screenshot_request(
+                    b64, av_pos, declined=declined,
+                )
 
             elif action == "greeting_check":
                 # 首次连接或切换角色时，前端请求检查是否需要主动搭话

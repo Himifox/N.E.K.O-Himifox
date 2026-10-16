@@ -393,6 +393,13 @@ async def _make_proactive_llm(
     disable_thinking: bool = True,
 ):
     """Create the configured proactive-chat model without owning lifecycle state."""
+    if use_vision:
+        # 截图返回后仍有会话准备/重生成等待；每次视觉调用前都复查，纯文字不受影响。
+        from utils.preferences import aload_global_conversation_settings
+
+        settings = await aload_global_conversation_settings(strict=True)
+        if settings.get("proactiveVisionEnabled", True) is not True:
+            raise PermissionError("Proactive screenshot use declined by privacy mode")
     if use_vision and model_config.has_vision_model:
         model = model_config.vision_model
         base_url = model_config.vision_base_url

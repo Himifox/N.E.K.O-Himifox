@@ -405,3 +405,46 @@ async def test_initial_phase2_generation_aborts_after_ui_engagement(
         output.result.body["reason_code"]
         == contracts.PROACTIVE_REASON_DELIVERY_PREEMPTED
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('use_vision', 'settings', 'expected_error'),
+    [
+        (True, {'proactiveVisionEnabled': True}, None),
+        (True, {}, None),
+        (True, {'proactiveVisionEnabled': False}, PermissionError),
+        (True, OSError('synthetic preference failure'), OSError),
+        (False, {'proactiveVisionEnabled': False}, None),
+        (False, OSError('synthetic preference failure'), None),
+    ],
+)
+async def test_model_factory_rechecks_vision_consent_without_blocking_text(
+    monkeypatch, use_vision, settings, expected_error,
+):
+    from utils import preferences
+
+    read = AsyncMock()
+    if isinstance(settings, Exception):
+        read.side_effect = settings
+    else:
+        read.return_value = settings
+    create = AsyncMock(return_value=object())
+    monkeypatch.setattr(preferences, 'aload_global_conversation_settings', read)
+    monkeypatch.setattr(generation, 'create_chat_llm_async', create)
+    config = generation.ProactiveModelConfig(
+        conversation_model='text-test', conversation_base_url=None,
+        conversation_api_key='synthetic', conversation_provider_type=None,
+        vision_model='vision-test', vision_api_key='synthetic',
+    )
+    if expected_error is not None:
+        with pytest.raises(expected_error):
+            await generation._make_proactive_llm(config, use_vision=use_vision)
+        create.assert_not_awaited()
+    else:
+        await generation._make_proactive_llm(config, use_vision=use_vision)
+        assert create.await_args.args[0] == ('vision-test' if use_vision else 'text-test')
+    if use_vision:
+        read.assert_awaited_once_with(strict=True)
+    else:
+        read.assert_not_awaited()

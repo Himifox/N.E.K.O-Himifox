@@ -2137,7 +2137,10 @@ async def handle_proactive_chat(
         # --- 向前端请求最新截图，替换 Phase 1 时拿到的旧截图 ---
         screenshot_b64_for_phase2 = ""
         if vision_content and model_config.has_vision_model:
-            fresh = await mgr.request_fresh_screenshot(timeout=3.0)
+            fresh = await mgr.request_fresh_screenshot(
+                timeout=3.0,
+                allow_backend_fallback=command.screenshot_allow_desktop_fallback,
+            )
             if fresh.b64:
                 fresh_b64 = fresh.b64
                 # 判据见 _resolve_phase2_avatar_position：WS 路径不给坐标 = 前端明确
@@ -2165,7 +2168,8 @@ async def handle_proactive_chat(
                 print(
                     f"[{lanlan_name}] Phase 2 获取到最新截图 ({len(fresh_b64) // 1024}KB)"
                 )
-            else:
+            # 技术失败可用旧图；明确拒绝不能通过旧图恢复本轮视觉输入。
+            elif not fresh.declined:
                 screenshot_b64_for_phase2 = vision_content.get("screenshot_b64", "")
                 if screenshot_b64_for_phase2:
                     print(
