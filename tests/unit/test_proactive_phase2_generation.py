@@ -445,6 +445,60 @@ async def test_model_factory_rechecks_vision_consent_without_blocking_text(
         await generation._make_proactive_llm(config, use_vision=use_vision)
         assert create.await_args.args[0] == ('vision-test' if use_vision else 'text-test')
     if use_vision:
-        read.assert_awaited_once_with(strict=True)
+        assert read.await_count == (1 if expected_error else 2)
+        assert all(call.kwargs == {"strict": True} for call in read.await_args_list)
     else:
         read.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['revoke', 'read_error', 'cancel', 'close_error', 'allowed', 'text'])
+async def test_client_creation_wait_rechecks_consent_and_closes_declined_client(monkeypatch, change):
+    import asyncio
+    from utils import preferences
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    llm = SimpleNamespace(aclose=AsyncMock())
+    if change == 'close_error':
+        llm.aclose.side_effect = OSError('synthetic close failure')
+    allowed = True
+
+    async def read(*, strict):
+        assert strict is True
+        if not allowed and change == 'read_error':
+            raise OSError('synthetic preference failure after creation')
+        if not allowed and change == 'cancel':
+            raise asyncio.CancelledError()
+        return {'proactiveVisionEnabled': allowed}
+
+    async def create(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return llm
+
+    read_mock = AsyncMock(side_effect=read)
+    monkeypatch.setattr(preferences, 'aload_global_conversation_settings', read_mock)
+    monkeypatch.setattr(generation, 'create_chat_llm_async', create)
+    config = generation.ProactiveModelConfig(
+        conversation_model='text-test', conversation_base_url=None,
+        conversation_api_key='synthetic', conversation_provider_type=None,
+        vision_model='vision-test', vision_api_key='synthetic',
+    )
+    task = asyncio.create_task(generation._make_proactive_llm(config, use_vision=change != 'text'))
+    await asyncio.wait_for(started.wait(), 1)
+    allowed = change == 'allowed'
+    release.set()
+    if change in ('allowed', 'text'):
+        assert await task is llm
+        llm.aclose.assert_not_awaited()
+    else:
+        error = (OSError if change == 'read_error' else
+                 asyncio.CancelledError if change == 'cancel' else PermissionError)
+        with pytest.raises(error):
+            await task
+        llm.aclose.assert_awaited_once_with()
+    if change == 'text':
+        read_mock.assert_not_awaited()
+    else:
+        assert read_mock.await_count == 2

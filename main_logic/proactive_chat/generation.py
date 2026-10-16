@@ -16,6 +16,7 @@
 """Parsers and output guards for proactive Phase 1/2 generation."""
 
 import asyncio
+from contextlib import suppress
 import logging
 import unicodedata
 import re
@@ -384,6 +385,15 @@ def _proactive_llm_retry_error_types() -> tuple[type[BaseException], ...]:
     return _PROACTIVE_LLM_RETRY_ERROR_TYPES
 
 
+async def _check_proactive_vision_consent() -> None:
+    """Require current consent before exposing proactive images to a model."""
+    from utils.preferences import aload_global_conversation_settings
+
+    settings = await aload_global_conversation_settings(strict=True)
+    if settings.get("proactiveVisionEnabled", True) is not True:
+        raise PermissionError("Proactive screenshot use declined by privacy mode")
+
+
 async def _make_proactive_llm(
     model_config: ProactiveModelConfig,
     *,
@@ -394,12 +404,7 @@ async def _make_proactive_llm(
 ):
     """Create the configured proactive-chat model without owning lifecycle state."""
     if use_vision:
-        # 截图返回后仍有会话准备/重生成等待；每次视觉调用前都复查，纯文字不受影响。
-        from utils.preferences import aload_global_conversation_settings
-
-        settings = await aload_global_conversation_settings(strict=True)
-        if settings.get("proactiveVisionEnabled", True) is not True:
-            raise PermissionError("Proactive screenshot use declined by privacy mode")
+        await _check_proactive_vision_consent()
     if use_vision and model_config.has_vision_model:
         model = model_config.vision_model
         base_url = model_config.vision_base_url
@@ -422,12 +427,22 @@ async def _make_proactive_llm(
     }
     if not disable_thinking:
         kwargs["extra_body"] = focus_extra_body(model)
-    return await create_chat_llm_async(  # noqa: LLM_OUTPUT_BUDGET
+    llm = await create_chat_llm_async(  # noqa: LLM_OUTPUT_BUDGET
         model,
         base_url,
         api_key,
         **kwargs,
     )
+    if use_vision:
+        # Client creation awaits a worker thread; consent may change while it runs.
+        # The caller has not entered the client context yet, so denial owns cleanup.
+        try:
+            await _check_proactive_vision_consent()
+        except BaseException:
+            with suppress(Exception):
+                await llm.aclose()
+            raise
+    return llm
 
 
 async def _llm_call_with_retry(
