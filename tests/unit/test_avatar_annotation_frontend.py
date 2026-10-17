@@ -395,9 +395,13 @@ def test_helper_marks_backend_fallback_as_full_screen():
     assert out["data"].endswith("BACKEND")
 
 
-@pytest.mark.parametrize("mode", ["cached", "native", "stream", "retry"])
+@pytest.mark.parametrize("mode", ["cached", "native", "stream", "retry", "fail"])
 def test_proactive_chat_discards_frames_when_remembered_identity_changes(mode: str):
-    """Every successful async capture route must reject a superseded window frame."""
+    """Every successful async capture route must reject a superseded window frame.
+
+    ``fail``: the confirmed window simply could not be captured. That is a
+    technical failure, not a decline, and must still not widen to the desktop.
+    """
     proactive_src = APP_PROACTIVE_PATH.read_text(encoding="utf-8")
     script = """
 const mode = '__MODE__';
@@ -457,14 +461,17 @@ const captureFrameFromStream = async () => {
   current = false;
   return { dataUrl: 'data:image/jpeg;base64,OLD' };
 };
-const fetchBackendScreenshot = async () => ({
-  dataUrl: 'data:image/jpeg;base64,BACKEND'
-});
+const fetchBackendScreenshot = async () => {
+  results.backend = true;
+  return { dataUrl: 'data:image/jpeg;base64,BACKEND' };
+};
 __RESOLVE__
 __HELPER__
 captureProactiveChatScreenshotWithSource().then((shot) => {
   results.data = shot && shot.dataUrl;
   results.via = shot && shot.via;
+  results.declined = shot && shot.declined === true;
+  results.allowDesktopFallback = shot && shot.allowDesktopFallback;
   console.log(JSON.stringify(results));
 });
 """
@@ -485,6 +492,10 @@ captureProactiveChatScreenshotWithSource().then((shot) => {
 
     assert out.get("data") is None
     assert out.get("via") is None
+    assert out.get("backend") is None
+    assert out["allowDesktopFallback"] is False
+    # A superseded window is unconfirmed (decline); a failed capture is not.
+    assert out["declined"] is (mode != "fail")
 
 
 _SCREENSHOT_ENTRY_TMPL = """

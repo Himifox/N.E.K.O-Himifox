@@ -2588,7 +2588,9 @@
         // direct/stream capture failed must not widen to a desktop screenshot.
         if (rememberedWindowCapture && rememberedWindowCapture.required) {
             console.warn('[主动搭话截图] 记忆窗口捕获失败，停止整桌面兜底');
-            return declinedProactiveScreenshot();
+            // 窗口已确认、只是这次没截到：属于技术失败，不是拒绝。后端仍可回用
+            // 本轮同窗口旧图，allowDesktopFallback=false 保证不扩大到整桌面。
+            return { dataUrl: null, via: null, captureType: null, allowDesktopFallback: false };
         }
 
         // 策略2: 后端 pyautogui 兜底

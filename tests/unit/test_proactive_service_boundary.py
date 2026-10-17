@@ -196,6 +196,76 @@ async def test_break_reminder_respects_round_ownership(monkeypatch, retired) -> 
     assert state_machine.proactive_round_id == "current-round"
 
 
+@pytest.mark.asyncio
+async def test_break_reminder_stops_when_round_retires_during_generation(monkeypatch) -> None:
+    """A restart mid-generation must not let the old reminder speak or commit."""
+    from main_logic.session_state import SessionStateMachine
+
+    state_machine = SessionStateMachine("Neko")
+    assert await state_machine.try_start_proactive(session=None, round_id="old-round")
+    corpus = MagicMock()
+    corpus.apreload = AsyncMock()
+    corpus.score_unanswered_proactive_draft.return_value = SimpleNamespace(
+        triggered=False, match_count=0, considered_count=0, best_similarity=0.0,
+        repeated_terms=(),
+    )
+    monkeypatch.setattr(break_reminders, "get_anti_repeat_corpus", lambda: corpus)
+    mgr = SimpleNamespace(
+        prepare_proactive_delivery=AsyncMock(return_value=True),
+        current_speech_id="old-sid",
+        state=state_machine,
+        feed_tts_chunk=AsyncMock(return_value=True),
+        finish_proactive_delivery=AsyncMock(return_value=True),
+        handle_new_message=AsyncMock(),
+        proactive_engagement_observation_started_at=100.0,
+        last_user_message_time=None,
+        last_user_engagement_time=None,
+    )
+
+    class RestartingLlm:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def astream(self, _messages):
+            yield SimpleNamespace(content="记得起来活动一下。")
+            # Session restart, then a replacement round claims its own SID.
+            await state_machine.reset(force=True)
+            assert await state_machine.try_start_proactive(session=None, round_id="new-round")
+            mgr.current_speech_id = "new-sid"
+            yield SimpleNamespace(content="")
+
+    monkeypatch.setattr(
+        break_reminders, "create_chat_llm_async", AsyncMock(return_value=RestartingLlm()),
+    )
+    config_manager = SimpleNamespace(
+        aget_model_api_config=AsyncMock(return_value={
+            "model": "fake-model",
+            "base_url": "http://127.0.0.1:9/v1",
+            "api_key": "fake-key",
+            "provider_type": "openai_compatible",
+        }),
+    )
+
+    result = await break_reminders._deliver_break_reminder_via_llm(
+        lanlan_name="Neko",
+        mgr=mgr,
+        config_manager=config_manager,
+        system_prompt="prompt",
+        channel="work_break",
+        lang="zh",
+        round_id="old-round",
+    )
+
+    assert result == break_reminders.BreakReminderDeliveryResult()
+    mgr.feed_tts_chunk.assert_not_awaited()
+    mgr.finish_proactive_delivery.assert_not_awaited()
+    mgr.handle_new_message.assert_not_awaited()
+    assert state_machine.proactive_round_id == "new-round"
+
+
 @pytest.mark.parametrize(
     "module",
     (
