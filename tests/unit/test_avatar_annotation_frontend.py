@@ -395,12 +395,14 @@ def test_helper_marks_backend_fallback_as_full_screen():
     assert out["data"].endswith("BACKEND")
 
 
-@pytest.mark.parametrize("mode", ["cached", "native", "stream", "retry", "fail"])
+@pytest.mark.parametrize("mode", ["cached", "native", "stream", "retry", "fail", "fail-switched"])
 def test_proactive_chat_discards_frames_when_remembered_identity_changes(mode: str):
     """Every successful async capture route must reject a superseded window frame.
 
     ``fail``: the confirmed window simply could not be captured. That is a
     technical failure, not a decline, and must still not widen to the desktop.
+    ``fail-switched``: capture failed after the remembered window changed; the
+    old Phase 1 image belongs to an unconfirmed window, so this is a decline.
     """
     proactive_src = APP_PROACTIVE_PATH.read_text(encoding="utf-8")
     script = """
@@ -450,6 +452,7 @@ const getDesktopProvider = () => mode === 'native'
 let acquireCount = 0;
 const acquireOrReuseCachedStream = async () => {
   acquireCount += 1;
+  if (mode === 'fail-switched') current = false;
   if (mode === 'stream') return firstStream;
   if (mode === 'retry') return acquireCount === 1 ? firstStream : retryStream;
   return null;

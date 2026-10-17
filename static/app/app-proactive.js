@@ -2587,8 +2587,12 @@
         // Remember-window is a fail-closed boundary. A validated window whose
         // direct/stream capture failed must not widen to a desktop screenshot.
         if (rememberedWindowCapture && rememberedWindowCapture.required) {
+            // 截图期间记忆窗口已换：旧图属于未确认的窗口，必须明确拒绝。
+            if (discardSupersededRememberedFrame('记忆窗口捕获失败')) {
+                return declinedProactiveScreenshot();
+            }
             console.warn('[主动搭话截图] 记忆窗口捕获失败，停止整桌面兜底');
-            // 窗口已确认、只是这次没截到：属于技术失败，不是拒绝。后端仍可回用
+            // 窗口仍是同一个、只是这次没截到：属于技术失败，不是拒绝。后端仍可回用
             // 本轮同窗口旧图，allowDesktopFallback=false 保证不扩大到整桌面。
             return { dataUrl: null, via: null, captureType: null, allowDesktopFallback: false };
         }
