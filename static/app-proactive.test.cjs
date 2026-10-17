@@ -527,10 +527,11 @@ test('live vision consent sends a typed snapshot only on an open socket', () => 
 
 test('a screenshot taken before a revocation never rides a later request', () => {
     const window = { appState: { proactiveVisionEnabled: true }, appConst: {}, addEventListener() {} };
+    let sharedSettings = null;
     vm.runInNewContext(source, {
         window,
         document: { addEventListener() {}, getElementById() { return null; } },
-        localStorage: { getItem() { return null; } },
+        localStorage: { getItem(key) { return key === 'project_neko_settings' ? sharedSettings : null; } },
         console, clearTimeout() {}, clearInterval() {}
     });
     const proactive = window.appProactive;
@@ -565,8 +566,10 @@ test('a screenshot taken before a revocation never rides a later request', () =>
         'a capture started after the revocation is unaffected',
     );
 
-    // Another window revoked: localStorage already says off, this window's seq has not moved.
-    window.appState.proactiveVisionEnabled = false;
+    // Another window revoked: localStorage already says off, while this window's
+    // state and revocation seq have not seen the sync event yet.
+    sharedSettings = JSON.stringify({ proactiveVisionEnabled: false });
+    assert.equal(window.appState.proactiveVisionEnabled, true);
     const crossWindow = makeBody();
     assert.equal(
         proactive.discardScreenshotRevokedSince(crossWindow, proactive.currentProactiveVisionRevocationSeq()),
