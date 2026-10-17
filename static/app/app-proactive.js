@@ -138,7 +138,9 @@
     }
 
     function discardScreenshotRevokedSince(requestBody, seqAtCapture) {
-        if (!requestBody.screenshot_data || seqAtCapture === proactiveVisionRevocationSeq) return false;
+        if (!requestBody.screenshot_data) return false;
+        // 另一窗口的撤权先落 localStorage，本窗口的同步事件可能还没到，序号未变。
+        if (seqAtCapture === proactiveVisionRevocationSeq && isProactiveVisionEnabledNow()) return false;
         delete requestBody.screenshot_data;
         delete requestBody.screenshot_allow_desktop_fallback;
         delete requestBody.avatar_position;

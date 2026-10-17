@@ -564,4 +564,13 @@ test('a screenshot taken before a revocation never rides a later request', () =>
         false,
         'a capture started after the revocation is unaffected',
     );
+
+    // Another window revoked: localStorage already says off, this window's seq has not moved.
+    window.appState.proactiveVisionEnabled = false;
+    const crossWindow = makeBody();
+    assert.equal(
+        proactive.discardScreenshotRevokedSince(crossWindow, proactive.currentProactiveVisionRevocationSeq()),
+        true,
+    );
+    assert.equal(crossWindow.screenshot_data, undefined);
 });
