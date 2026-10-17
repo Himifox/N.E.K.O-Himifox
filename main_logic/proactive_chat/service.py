@@ -931,6 +931,7 @@ async def handle_proactive_chat(
                     ),
                     channel="anti_slack",
                     lang=_break_lang,
+                    round_id=lifecycle.screenshot_request_id,
                 )
                 delivered_text = reminder_delivery.delivered_text
                 if reminder_delivery.repeat_suppressed:
@@ -1040,6 +1041,7 @@ async def handle_proactive_chat(
                     ),
                     channel="work_break_game_invite",
                     lang=_break_lang,
+                    round_id=lifecycle.screenshot_request_id,
                 )
                 delivered_text = reminder_delivery.delivered_text
                 if reminder_delivery.repeat_suppressed:
@@ -1167,6 +1169,7 @@ async def handle_proactive_chat(
                 ),
                 channel="work_break",
                 lang=_break_lang,
+                round_id=lifecycle.screenshot_request_id,
             )
             delivered_text = reminder_delivery.delivered_text
             if reminder_delivery.repeat_suppressed:
@@ -1308,6 +1311,7 @@ async def handle_proactive_chat(
             invite_lang=invite_lang,
             master_name=master_name_current,
             user_toggle_enabled=_user_invite_toggle,
+            round_id=lifecycle.screenshot_request_id,
             **state_storage_kwargs,
         )
         if invite_short_circuit is not None:

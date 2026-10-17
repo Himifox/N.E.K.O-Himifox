@@ -523,3 +523,45 @@ test('live vision consent sends a typed snapshot only on an open socket', () => 
     state.proactiveVisionEnabled = undefined;
     mod.syncProactiveVisionConsent();
 });
+
+
+test('a screenshot taken before a revocation never rides a later request', () => {
+    const window = { appState: { proactiveVisionEnabled: true }, appConst: {}, addEventListener() {} };
+    vm.runInNewContext(source, {
+        window,
+        document: { addEventListener() {}, getElementById() { return null; } },
+        localStorage: { getItem() { return null; } },
+        console, clearTimeout() {}, clearInterval() {}
+    });
+    const proactive = window.appProactive;
+    const makeBody = () => ({
+        enabled_modes: ['vision', 'window', 'news'],
+        screenshot_data: 'data:image/jpeg;base64,AAAA',
+        screenshot_allow_desktop_fallback: true,
+        avatar_position: { centerX: 0.5 },
+        window_title: 'Editor',
+    });
+
+    const seqAtCapture = proactive.currentProactiveVisionRevocationSeq();
+    proactive.noteProactiveVisionConsent(true);
+    const untouched = makeBody();
+    assert.equal(proactive.discardScreenshotRevokedSince(untouched, seqAtCapture), false);
+    assert.deepEqual(untouched, makeBody(), 'enabling alone keeps the image');
+
+    // Revoke, then re-enable before the request goes out.
+    proactive.noteProactiveVisionConsent(false);
+    proactive.noteProactiveVisionConsent(true);
+    const revoked = makeBody();
+    assert.equal(proactive.discardScreenshotRevokedSince(revoked, seqAtCapture), true);
+    assert.deepEqual(revoked, {
+        enabled_modes: ['window', 'news'],
+        window_title: 'Editor',
+    });
+
+    const later = makeBody();
+    assert.equal(
+        proactive.discardScreenshotRevokedSince(later, proactive.currentProactiveVisionRevocationSeq()),
+        false,
+        'a capture started after the revocation is unaffected',
+    );
+});

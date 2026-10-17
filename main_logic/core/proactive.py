@@ -73,7 +73,7 @@ class ProactiveMixin:
             )
         self._proactive_vision_enabled = enabled
 
-    async def _proactive_screenshot_privacy_enabled(self) -> bool:
+    async def _proactive_screenshot_declined(self) -> bool:
         """Read current consent strictly: unreadable preferences must not grant capture."""
         try:
             settings = await _core_facade.aload_global_conversation_settings(strict=True)
@@ -226,7 +226,7 @@ class ProactiveMixin:
 
         if not still_owned():
             return FreshScreenshot(declined=True)
-        if await ProactiveMixin._proactive_screenshot_privacy_enabled(self) or not still_owned():
+        if await ProactiveMixin._proactive_screenshot_declined(self) or not still_owned():
             return FreshScreenshot(declined=True)
 
         # 策略1: 前端 WebSocket 截图
@@ -271,7 +271,7 @@ class ProactiveMixin:
                             self.lanlan_name, comp_err,
                         )
                     # 用户可能在等待前端或压缩期间开启隐私；旧客户端也不能绕过它。
-                    if await ProactiveMixin._proactive_screenshot_privacy_enabled(self) or not still_owned():
+                    if await ProactiveMixin._proactive_screenshot_declined(self) or not still_owned():
                         return FreshScreenshot(declined=True)
                     return FreshScreenshot(
                         b64=b64, source="websocket", avatar_position=ws_av_pos,
@@ -288,7 +288,7 @@ class ProactiveMixin:
         # 窗口约束随初始请求传来，前端超时/断线时也不能扩大到整桌面。
         if not still_owned():
             return FreshScreenshot(declined=True)
-        if await ProactiveMixin._proactive_screenshot_privacy_enabled(self) or not still_owned():
+        if await ProactiveMixin._proactive_screenshot_declined(self) or not still_owned():
             return FreshScreenshot(declined=True)
         if not allow_backend_fallback:
             # No new desktop capture; an ordinary timeout may still reuse the
@@ -319,7 +319,7 @@ class ProactiveMixin:
                     )
 
                 jpg_bytes = await asyncio.to_thread(_capture_and_compress)
-                if await ProactiveMixin._proactive_screenshot_privacy_enabled(self) or not still_owned():
+                if await ProactiveMixin._proactive_screenshot_declined(self) or not still_owned():
                     return FreshScreenshot(declined=True)
                 b64_str = b64mod.b64encode(jpg_bytes).decode('utf-8')
                 logger.info("[%s] request_fresh_screenshot: 后端 pyautogui 兜底成功 (%dKB)", self.lanlan_name, len(jpg_bytes) // 1024)
@@ -331,7 +331,7 @@ class ProactiveMixin:
 
         # 采集异常也要复查隐私，避免异常被当作“允许回用旧图”的普通失败。
         return FreshScreenshot(declined=(
-            await ProactiveMixin._proactive_screenshot_privacy_enabled(self) or not still_owned()
+            await ProactiveMixin._proactive_screenshot_declined(self) or not still_owned()
         ))
 
     def resolve_screenshot_request(

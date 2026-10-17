@@ -125,6 +125,31 @@
 
     mod.isProactiveVisionEnabledNow = isProactiveVisionEnabledNow;
 
+    // 每次撤回授权递增。截图之后递增过，这张图就属于撤权前：即使随后又重新
+    // 开启，也不能随请求发出——后端只能察觉它收到请求之后的撤权。
+    var proactiveVisionRevocationSeq = 0;
+
+    function noteProactiveVisionConsent(enabled) {
+        if (enabled === false) proactiveVisionRevocationSeq += 1;
+    }
+
+    function currentProactiveVisionRevocationSeq() {
+        return proactiveVisionRevocationSeq;
+    }
+
+    function discardScreenshotRevokedSince(requestBody, seqAtCapture) {
+        if (!requestBody.screenshot_data || seqAtCapture === proactiveVisionRevocationSeq) return false;
+        delete requestBody.screenshot_data;
+        delete requestBody.screenshot_allow_desktop_fallback;
+        delete requestBody.avatar_position;
+        requestBody.enabled_modes = (requestBody.enabled_modes || []).filter(function (m) { return m !== 'vision'; });
+        return true;
+    }
+
+    mod.noteProactiveVisionConsent = noteProactiveVisionConsent;
+    mod.currentProactiveVisionRevocationSeq = currentProactiveVisionRevocationSeq;
+    mod.discardScreenshotRevokedSince = discardScreenshotRevokedSince;
+
     function isHomeTutorialFeatureSuppressed() {
         if (window.isNekoClickGuideActive === true) return true;
         try {
@@ -1319,6 +1344,9 @@
                 }
             }
 
+            // 截图开始前记下撤权序号，发送前比对（见 discardScreenshotRevokedSince）。
+            var visionRevocationSeqAtCapture = proactiveVisionRevocationSeq;
+
             // 如果包含 vision 模式，需要在前端获取截图和窗口标题
             if (availableModes.includes('vision') || availableModes.includes('window')) {
                 var fetchTasks = [];
@@ -1476,6 +1504,11 @@
                 var hdrs = { 'Content-Type': 'application/json' };
                 if (proactiveSec && typeof proactiveSec.getMutationHeaders === 'function') {
                     try { Object.assign(hdrs, await proactiveSec.getMutationHeaders()); } catch (_) { }
+                }
+                // 截图、取 header、CSRF 重试期间都可能撤权后又重新开启。
+                if (discardScreenshotRevokedSince(requestBody, visionRevocationSeqAtCapture)) {
+                    console.log('截图后视觉授权被撤回过，本次请求不带截图');
+                    proactiveBody = JSON.stringify(requestBody);
                 }
                 return fetch('/api/proactive_chat', {
                     method: 'POST',

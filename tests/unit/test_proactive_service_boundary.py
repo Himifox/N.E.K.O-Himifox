@@ -144,6 +144,58 @@ async def test_break_reminder_router_adapter_preserves_tuple_contract(
     assert domain_delivery.await_args.kwargs["config_manager"] is config_manager
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retired", [False, True], ids=("owned-round", "retired-round"))
+async def test_break_reminder_respects_round_ownership(monkeypatch, retired) -> None:
+    """A retired HTTP round's break reminder cannot advance the replacement round."""
+    from main_logic.session_state import ProactivePhase, SessionStateMachine
+
+    state_machine = SessionStateMachine("Neko")
+    assert await state_machine.try_start_proactive(session=None, round_id="current-round")
+    corpus = SimpleNamespace(apreload=AsyncMock())
+    monkeypatch.setattr(break_reminders, "get_anti_repeat_corpus", lambda: corpus)
+    monkeypatch.setattr(
+        break_reminders,
+        "create_chat_llm_async",
+        AsyncMock(side_effect=RuntimeError("synthetic model failure")),
+    )
+    mgr = SimpleNamespace(
+        prepare_proactive_delivery=AsyncMock(return_value=True),
+        current_speech_id="break-sid",
+        state=state_machine,
+        handle_new_message=AsyncMock(),
+        last_user_message_time=None,
+    )
+    config_manager = SimpleNamespace(
+        aget_model_api_config=AsyncMock(return_value={
+            "model": "fake-model",
+            "base_url": "http://127.0.0.1:9/v1",
+            "api_key": "fake-key",
+            "provider_type": "openai_compatible",
+        }),
+    )
+    round_id = "retired-round" if retired else "current-round"
+
+    result = await break_reminders._deliver_break_reminder_via_llm(
+        lanlan_name="Neko",
+        mgr=mgr,
+        config_manager=config_manager,
+        system_prompt="prompt",
+        channel="work_break",
+        lang="zh",
+        round_id=round_id,
+    )
+
+    assert result == break_reminders.BreakReminderDeliveryResult()
+    mgr.prepare_proactive_delivery.assert_awaited_once_with(
+        min_idle_secs=10.0, round_id=round_id,
+    )
+    assert state_machine.phase is (
+        ProactivePhase.PHASE1 if retired else ProactivePhase.PHASE2
+    )
+    assert state_machine.proactive_round_id == "current-round"
+
+
 @pytest.mark.parametrize(
     "module",
     (

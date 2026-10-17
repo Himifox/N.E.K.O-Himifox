@@ -266,6 +266,7 @@ async def _deliver_break_reminder_via_llm(
     channel: str,  # 'work_break' | 'anti_slack' | 'work_break_game_invite'
     lang: str,
     timeout_seconds: float = 25.0,
+    round_id: str | None = None,
 ) -> BreakReminderDeliveryResult:
     """Minimal Phase 2 LLM stream delivery for break reminders.
 
@@ -313,7 +314,10 @@ async def _deliver_break_reminder_via_llm(
 
     # Idle gate (10s) — same threshold mini-game invite uses. If the user just
     # typed/spoke, don't interrupt.
-    if not await mgr.prepare_proactive_delivery(min_idle_secs=10.0):
+    # Same round ownership as the main Phase 2 path: a retired HTTP task must
+    # not claim or advance a replacement round.
+    round_payload = {"round_id": round_id} if round_id is not None else {}
+    if not await mgr.prepare_proactive_delivery(min_idle_secs=10.0, **round_payload):
         return BreakReminderDeliveryResult()
 
     try:
@@ -325,7 +329,7 @@ async def _deliver_break_reminder_via_llm(
     proactive_sid = mgr.current_speech_id
     from main_logic.session_state import SessionEvent as _SE
 
-    await mgr.state.fire(_SE.PROACTIVE_PHASE2)
+    await mgr.state.fire(_SE.PROACTIVE_PHASE2, **round_payload)
 
     # Minimal HumanMessage — just ask the model to begin. The localized
     # ``BEGIN_GENERATE`` matches what normal Phase 2 uses, so the model

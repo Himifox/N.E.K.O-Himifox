@@ -1184,6 +1184,11 @@
     }
 
     function stopVisionAfterPrivacyEnabled() {
+        // Screenshots taken before a revocation must not ride a later request,
+        // even if consent is re-enabled before that request is sent.
+        if (window.appProactive && typeof window.appProactive.noteProactiveVisionConsent === 'function') {
+            window.appProactive.noteProactiveVisionConsent(S.proactiveVisionEnabled);
+        }
         // Notify live work before the queued settings POST reaches disk. Reconnect
         // repeats this snapshot; enabling still needs persisted backend consent.
         if (window.appWebSocket && typeof window.appWebSocket.syncProactiveVisionConsent === 'function') {
