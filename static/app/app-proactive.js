@@ -137,20 +137,24 @@
         return proactiveVisionRevocationSeq;
     }
 
-    function discardScreenshotRevokedSince(requestBody, seqAtCapture) {
-        if (!requestBody.screenshot_data) return false;
+    // vision 与 window 同属视觉授权（见 latestModes），撤权时两者一起去掉。
+    function discardVisionRevokedSince(requestBody, seqAtCapture) {
+        var modes = requestBody.enabled_modes || [];
+        if (!requestBody.screenshot_data && !requestBody.window_title
+            && modes.indexOf('vision') === -1 && modes.indexOf('window') === -1) return false;
         // 另一窗口的撤权先落 localStorage，本窗口的同步事件可能还没到，序号未变。
         if (seqAtCapture === proactiveVisionRevocationSeq && isProactiveVisionEnabledNow()) return false;
         delete requestBody.screenshot_data;
         delete requestBody.screenshot_allow_desktop_fallback;
         delete requestBody.avatar_position;
-        requestBody.enabled_modes = (requestBody.enabled_modes || []).filter(function (m) { return m !== 'vision'; });
+        delete requestBody.window_title;
+        requestBody.enabled_modes = modes.filter(function (m) { return m !== 'vision' && m !== 'window'; });
         return true;
     }
 
     mod.noteProactiveVisionConsent = noteProactiveVisionConsent;
     mod.currentProactiveVisionRevocationSeq = currentProactiveVisionRevocationSeq;
-    mod.discardScreenshotRevokedSince = discardScreenshotRevokedSince;
+    mod.discardVisionRevokedSince = discardVisionRevokedSince;
 
     function isHomeTutorialFeatureSuppressed() {
         if (window.isNekoClickGuideActive === true) return true;
@@ -1346,7 +1350,7 @@
                 }
             }
 
-            // 截图开始前记下撤权序号，发送前比对（见 discardScreenshotRevokedSince）。
+            // 截图开始前记下撤权序号，发送前比对（见 discardVisionRevokedSince）。
             var visionRevocationSeqAtCapture = proactiveVisionRevocationSeq;
 
             // 如果包含 vision 模式，需要在前端获取截图和窗口标题
@@ -1508,8 +1512,8 @@
                     try { Object.assign(hdrs, await proactiveSec.getMutationHeaders()); } catch (_) { }
                 }
                 // 截图、取 header、CSRF 重试期间都可能撤权后又重新开启。
-                if (discardScreenshotRevokedSince(requestBody, visionRevocationSeqAtCapture)) {
-                    console.log('截图后视觉授权被撤回过，本次请求不带截图');
+                if (discardVisionRevokedSince(requestBody, visionRevocationSeqAtCapture)) {
+                    console.log('截图后视觉授权被撤回过，本次请求不带截图和窗口信息');
                     proactiveBody = JSON.stringify(requestBody);
                 }
                 return fetch('/api/proactive_chat', {
