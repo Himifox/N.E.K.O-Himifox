@@ -197,7 +197,10 @@ async def test_break_reminder_respects_round_ownership(monkeypatch, retired) -> 
 
 
 @pytest.mark.asyncio
-async def test_break_reminder_stops_when_round_retires_during_generation(monkeypatch) -> None:
+@pytest.mark.parametrize("restart", [True, False], ids=("restarted", "owned"))
+async def test_break_reminder_stops_when_round_retires_during_generation(
+    monkeypatch, restart,
+) -> None:
     """A restart mid-generation must not let the old reminder speak or commit."""
     from main_logic.session_state import SessionStateMachine
 
@@ -210,6 +213,7 @@ async def test_break_reminder_stops_when_round_retires_during_generation(monkeyp
         repeated_terms=(),
     )
     monkeypatch.setattr(break_reminders, "get_anti_repeat_corpus", lambda: corpus)
+    monkeypatch.setattr(break_reminders, "_record_proactive_chat", MagicMock())
     mgr = SimpleNamespace(
         prepare_proactive_delivery=AsyncMock(return_value=True),
         current_speech_id="old-sid",
@@ -231,6 +235,8 @@ async def test_break_reminder_stops_when_round_retires_during_generation(monkeyp
 
         async def astream(self, _messages):
             yield SimpleNamespace(content="记得起来活动一下。")
+            if not restart:
+                return
             # Session restart, then a replacement round claims its own SID.
             await state_machine.reset(force=True)
             assert await state_machine.try_start_proactive(session=None, round_id="new-round")
@@ -259,6 +265,15 @@ async def test_break_reminder_stops_when_round_retires_during_generation(monkeyp
         round_id="old-round",
     )
 
+    if not restart:
+        assert result.delivered_text == "记得起来活动一下。"
+        # The core TTS/commit critical sections recheck the round themselves.
+        assert mgr.feed_tts_chunk.await_args.kwargs["expected_round_id"] == "old-round"
+        assert (
+            mgr.finish_proactive_delivery.await_args.kwargs["expected_round_id"]
+            == "old-round"
+        )
+        return
     assert result == break_reminders.BreakReminderDeliveryResult()
     mgr.feed_tts_chunk.assert_not_awaited()
     mgr.finish_proactive_delivery.assert_not_awaited()
@@ -1127,3 +1142,62 @@ async def test_safe_fire_proactive_done_swallows_and_logs_fire_errors(
 
     warning.assert_called_once()
     assert warning.call_args.args[0] == "safe_fire_proactive_done 异常: %s"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", ["granted", "revoked-before", "revoked-during", "unreadable", "no-vision-modes"],
+)
+async def test_screen_and_window_sources_follow_live_vision_consent(monkeypatch, case) -> None:
+    """A revocation while the POST is in flight must stop server-side screen/window reads."""
+    from utils import preferences
+
+    consent = {"enabled": case != "revoked-before"}
+    settings_reads = []
+
+    async def load_settings(*, strict=False):
+        settings_reads.append(strict)
+        if case == "unreadable":
+            raise OSError("synthetic unreadable preferences")
+        return {"proactiveVisionEnabled": True}
+
+    monkeypatch.setattr(preferences, "aload_global_conversation_settings", load_settings)
+    collected_modes = []
+
+    async def fake_collect(*, command, enabled_modes, lanlan_name, log):
+        collected_modes.append(list(enabled_modes))
+        if case == "revoked-during":
+            consent["enabled"] = False
+        return {mode: {"formatted_content": mode} for mode in enabled_modes}
+
+    monkeypatch.setattr(service, "collect_proactive_sources", fake_collect)
+    requested = ["news"] if case == "no-vision-modes" else ["vision", "window", "news"]
+
+    modes, sources = await service._collect_sources_under_vision_consent(
+        command=contracts.ProactiveChatCommand(lanlan_name="Yui"),
+        enabled_modes=requested,
+        lanlan_name="Yui",
+        vision_consent_check=lambda: consent["enabled"],
+    )
+
+    if case in ("granted", "no-vision-modes"):
+        assert collected_modes == [requested]
+        assert modes == requested
+        assert set(sources) == set(requested)
+    elif case == "revoked-during":
+        assert collected_modes == [requested], "the read had already started"
+        assert set(sources) == {"news"}
+    else:
+        assert collected_modes == [["news"]], "the screen and window are never read"
+        assert modes == ["news"]
+        assert set(sources) == {"news"}
+    if case == "no-vision-modes":
+        assert settings_reads == [], "text-only rounds do not depend on vision consent"
+    elif case not in ("revoked-before",):
+        assert settings_reads and all(settings_reads), "consent is read strictly"
+
+
+def test_service_collects_sources_only_through_the_vision_consent_gate() -> None:
+    handler_source = inspect.getsource(service.handle_proactive_chat)
+    assert "_collect_sources_under_vision_consent(" in handler_source
+    assert "collect_proactive_sources(" not in handler_source

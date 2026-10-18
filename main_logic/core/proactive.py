@@ -73,6 +73,17 @@ class ProactiveMixin:
             )
         self._proactive_vision_enabled = enabled
 
+    def _proactive_round_owned(self, round_id: str | None) -> bool:
+        """Whether ``round_id`` still owns the proactive round; ``None`` opts out.
+
+        Session teardown retires the round ID but keeps ``current_speech_id``,
+        so SID guards alone cannot see a retired round.
+        """
+        return round_id is None or (
+            getattr(self, "_proactive_screenshot_request_id", None) == round_id
+            and getattr(getattr(self, "state", None), "proactive_round_id", None) == round_id
+        )
+
     async def _proactive_screenshot_declined(self) -> bool:
         """Read current consent strictly: unreadable preferences must not grant capture."""
         try:
@@ -386,10 +397,7 @@ class ProactiveMixin:
             )
 
         def _round_owned() -> bool:
-            return round_id is None or (
-                getattr(self, "_proactive_screenshot_request_id", None) == round_id
-                and self.state.proactive_round_id == round_id
-            )
+            return ProactiveMixin._proactive_round_owned(self, round_id)
 
         if not _round_owned():
             return False
@@ -491,6 +499,7 @@ class ProactiveMixin:
         text: str,
         expected_speech_id: str | None = None,
         expected_user_engagement_time: Any = Ellipsis,
+        expected_round_id: str | None = None,
     ) -> bool:
         """Feed text to the TTS pipeline only, without sending it to the frontend display.
 
@@ -504,13 +513,21 @@ class ProactiveMixin:
         expected_user_engagement_time: when supplied (including an expected
         ``None``), drop if genuine UI engagement advanced while this call waited
         for the TTS lock. Returns whether the chunk was accepted.
+
+        expected_round_id: when supplied, drop if the proactive round was retired
+        (e.g. by a session restart) while this call waited for the TTS lock.
         """
         if getattr(self, "_takeover_active", False):
+            return False
+        if not ProactiveMixin._proactive_round_owned(self, expected_round_id):
             return False
         if not self.use_tts:
             return True
         async with self.tts_cache_lock:
             if getattr(self, "_takeover_active", False):
+                return False
+            if not ProactiveMixin._proactive_round_owned(self, expected_round_id):
+                logger.debug("feed_tts_chunk drop: proactive round retired len=%d", len(text))
                 return False
             if expected_speech_id is not None and self.current_speech_id != expected_speech_id:
                 logger.debug(
@@ -553,6 +570,7 @@ class ProactiveMixin:
         source_tag: str | None = None,
         vision_screenshot_b64: str | None = None,
         expected_user_engagement_time: Any = Ellipsis,
+        expected_round_id: str | None = None,
     ) -> bool:
         """Wrap-up after streaming completes: deliver the full text in one shot + record history + TTS/turn end signals.
 
@@ -569,6 +587,10 @@ class ProactiveMixin:
         ``None``), skip the commit if genuine UI engagement advanced before the
         final commit boundary. The caller must clear any TTS chunk already queued
         before this check.
+
+        expected_round_id: when supplied, skip the commit if the proactive round
+        was retired (e.g. by a session restart). Rechecked at the publish
+        boundary, because teardown keeps ``current_speech_id`` unchanged.
 
         action_note: optional; when non-empty it is appended to the tail of that
         AIMessage's content in _conversation_history (history-only — never enters
@@ -605,6 +627,12 @@ class ProactiveMixin:
                     self.lanlan_name, expected_speech_id, self.current_speech_id,
                 )
                 return False
+            if not ProactiveMixin._proactive_round_owned(self, expected_round_id):
+                logger.info(
+                    "[%s] finish_proactive_delivery skip: proactive round retired",
+                    self.lanlan_name,
+                )
+                return False
             if (
                 expected_user_engagement_time
                 is not Ellipsis
@@ -630,7 +658,10 @@ class ProactiveMixin:
             # 最后一个 await 之后、同步队列写入之前再校验一次；这样 UI
             # engagement 即使发生在 state.fire 或 Focus bubble 清理期间，
             # 也不会漏出过期气泡。
-            await self.state.fire(SessionEvent.PROACTIVE_COMMITTING)
+            round_payload = (
+                {"round_id": expected_round_id} if expected_round_id is not None else {}
+            )
+            await self.state.fire(SessionEvent.PROACTIVE_COMMITTING, **round_payload)
             publication_times: list[float] = []
             published = await self.send_lanlan_response(
                 full_text,
@@ -639,6 +670,10 @@ class ProactiveMixin:
                 expected_speech_id=expected_speech_id,
                 expected_user_engagement_time=expected_user_engagement_time,
                 on_published=publication_times.append,
+                publish_if=(
+                    None if expected_round_id is None
+                    else lambda: ProactiveMixin._proactive_round_owned(self, expected_round_id)
+                ),
             )
             if published is None:
                 logger.info(

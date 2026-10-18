@@ -223,9 +223,12 @@ async def _commit_proactive_delivery(
     proactive_lang: str,
     master_name: str,
     log: logging.Logger | None = None,
+    round_id: str | None = None,
 ) -> DeliveryCommit:
     """Build, feed, and atomically finish one proactive delivery."""
     active_logger = log or logger
+    # The TTS/commit critical sections recheck round ownership themselves.
+    delivery_round = {"expected_round_id": round_id} if round_id is not None else {}
     has_music_topic = "music" in active_channels
     primary_channel, source_links = build_proactive_response(
         source_tag,
@@ -298,6 +301,7 @@ async def _commit_proactive_delivery(
             response_text,
             expected_speech_id=proactive_sid,
             expected_user_engagement_time=expected_user_engagement_time,
+            **delivery_round,
         )
         if tts_accepted is False and _proactive_feed_rejected_for_takeover(
             mgr,
@@ -333,6 +337,7 @@ async def _commit_proactive_delivery(
             action_note=action_note,
             source_tag=delivered_tag,
             vision_screenshot_b64=staged_screenshot,
+            **delivery_round,
         )
     except Exception as exc:
         active_logger.warning(

@@ -1808,4 +1808,9 @@ async def test_short_circuit_invite_respects_round_ownership(monkeypatch, retire
     else:
         assert out.result.body["reason_code"] == sr.PROACTIVE_REASON_CHAT_DELIVERED
         assert state_machine.phase is ProactivePhase.PHASE2
+        assert mgr.feed_tts_chunk.await_args.kwargs["expected_round_id"] == "current-round"
+        assert (
+            mgr.finish_proactive_delivery.await_args.kwargs["expected_round_id"]
+            == "current-round"
+        )
     assert state_machine.proactive_round_id == "current-round"

@@ -94,11 +94,13 @@ from main_logic.proactive_chat.generation import (
     Phase2PromptContext,
     ProactiveModelConfig,
     _append_directives_section,
+    _check_proactive_vision_consent,
     _decide_phase1_channels,
     _fetch_phase1_followups,
     _is_neko_community_phase1_source,
     _lookup_link_by_phase1_selection,
     _proactive_llm_retry_error_types,
+    _proactive_vision_consent_checker,
     _run_phase2_generation,
     _run_unified_phase1,
 )
@@ -184,6 +186,8 @@ def _consume_repeat_suppressed_break_reminder(
 
 
 _MEME_PROXY_CANDIDATE_CHECK_LIMIT = 3
+# Sources that read the screen or the active window share the vision consent gate.
+_PROACTIVE_VISION_SOURCE_MODES = frozenset({"vision", "window"})
 
 
 _PHASE1_FETCH_PER_SOURCE = (
@@ -490,6 +494,46 @@ def _resolve_phase2_avatar_position(fresh, request_avatar_position):
     if source == "backend_fallback":
         return request_avatar_position
     return getattr(fresh, "avatar_position", None)
+
+
+async def _collect_sources_under_vision_consent(
+    *,
+    command: ProactiveChatCommand,
+    enabled_modes: list[str],
+    lanlan_name: str,
+    vision_consent_check: Any,
+) -> tuple[list[str], dict[str, dict]]:
+    """Collect enabled sources; screen and window sources only under vision consent.
+
+    The frontend withdraws these modes at send time. A revocation that arrives
+    while the request is in flight is enforced here: before collection the
+    modes are dropped, so the screen and the active window are not read; after
+    collection their results are discarded, because a read already started
+    cannot be recalled.
+    """
+    async def declined() -> bool:
+        try:
+            await _check_proactive_vision_consent(vision_consent_check)
+        except Exception:
+            return True
+        return False
+
+    if _PROACTIVE_VISION_SOURCE_MODES.intersection(enabled_modes) and await declined():
+        logger.info("[%s] 视觉授权已撤回，本轮不读取屏幕/窗口来源", lanlan_name)
+        enabled_modes = [
+            mode for mode in enabled_modes if mode not in _PROACTIVE_VISION_SOURCE_MODES
+        ]
+    sources = await collect_proactive_sources(
+        command=command,
+        enabled_modes=enabled_modes,
+        lanlan_name=lanlan_name,
+        log=logger,
+    )
+    if _PROACTIVE_VISION_SOURCE_MODES.intersection(sources) and await declined():
+        logger.info("[%s] 视觉授权在采集期间撤回，丢弃屏幕/窗口来源", lanlan_name)
+        for mode in _PROACTIVE_VISION_SOURCE_MODES:
+            sources.pop(mode, None)
+    return enabled_modes, sources
 
 
 async def handle_proactive_chat(
@@ -1360,11 +1404,13 @@ async def handle_proactive_chat(
         await _ensure_source_history_loaded(**state_storage_kwargs)
 
         # ========== 0. 并行获取所有信息源内容（无 LLM） ==========
-        sources = await collect_proactive_sources(
+        enabled_modes, sources = await _collect_sources_under_vision_consent(
             command=command,
             enabled_modes=enabled_modes,
             lanlan_name=lanlan_name,
-            log=logger,
+            vision_consent_check=_proactive_vision_consent_checker(
+                mgr, vision_consent_epoch,
+            ),
         )
         avatar_position = command.avatar_position
 
@@ -2493,6 +2539,7 @@ async def handle_proactive_chat(
             proactive_lang=proactive_lang,
             master_name=master_name_current,
             log=logger,
+            round_id=lifecycle.screenshot_request_id,
         )
         if delivery_commit.result is not None:
             return await _end_proactive(

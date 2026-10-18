@@ -512,6 +512,7 @@ async def _attempt_mini_game_invite_delivery(
     # Same round ownership as the main Phase 2 path: a retired HTTP task must
     # not claim or advance a replacement round.
     round_payload = {"round_id": round_id} if round_id is not None else {}
+    delivery_round = {"expected_round_id": round_id} if round_id is not None else {}
     if not await mgr.prepare_proactive_delivery(min_idle_secs=10.0, **round_payload):
         return _proactive_pass_body(
             PROACTIVE_REASON_PASS_DELIVERY_BUSY,
@@ -541,6 +542,7 @@ async def _attempt_mini_game_invite_delivery(
                 invite_text,
                 expected_speech_id=proactive_sid,
                 expected_user_engagement_time=expected_user_engagement_time,
+                **delivery_round,
             )
     except Exception as exc:
         logger.warning(
@@ -566,6 +568,7 @@ async def _attempt_mini_game_invite_delivery(
         invite_text,
         expected_speech_id=proactive_sid,
         expected_user_engagement_time=expected_user_engagement_time,
+        **delivery_round,
     )
     if not committed:
         if _proactive_turn_still_owned(mgr, proactive_sid):

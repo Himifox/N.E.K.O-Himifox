@@ -385,6 +385,20 @@ def _proactive_llm_retry_error_types() -> tuple[type[BaseException], ...]:
     return _PROACTIVE_LLM_RETRY_ERROR_TYPES
 
 
+def _proactive_vision_consent_checker(
+    mgr: Any, vision_consent_epoch: int,
+) -> Callable[[], bool]:
+    """Live consent for one round, judged against the epoch it started under."""
+    def live_consent_check() -> bool:
+        # A quick off/on must not restore vision input held by the revoked round.
+        return (
+            getattr(mgr, "_proactive_vision_enabled", None) is not False
+            and getattr(mgr, "_proactive_vision_revocation_epoch", 0) == vision_consent_epoch
+        )
+
+    return live_consent_check
+
+
 async def _check_proactive_vision_consent(
     live_consent_check: Callable[[], bool] | None = None,
 ) -> None:
@@ -813,13 +827,7 @@ async def _run_phase2_generation(
 
     if vision_consent_epoch is None:
         vision_consent_epoch = getattr(mgr, "_proactive_vision_revocation_epoch", 0)
-
-    def live_consent_check() -> bool:
-        # A quick off/on must not restore an image held by the revoked round.
-        return (
-            getattr(mgr, "_proactive_vision_enabled", None) is not False
-            and getattr(mgr, "_proactive_vision_revocation_epoch", 0) == vision_consent_epoch
-        )
+    live_consent_check = _proactive_vision_consent_checker(mgr, vision_consent_epoch)
 
     make_llm = partial(
         _make_proactive_llm, model_config, live_consent_check=live_consent_check,
