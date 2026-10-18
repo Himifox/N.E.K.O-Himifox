@@ -15,6 +15,8 @@ from queue import Queue
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from main_logic.core import (
@@ -715,18 +717,34 @@ async def _retire_round(mgr):
     await mgr.state.reset(force=True)
 
 
+class _SignalingLock(asyncio.Lock):
+    """Signals when a caller starts waiting, i.e. after its pre-lock checks."""
+
+    def __init__(self):
+        super().__init__()
+        self.waiting = asyncio.Event()
+
+    async def acquire(self):
+        self.waiting.set()
+        return await super().acquire()
+
+
 async def test_feed_tts_chunk_drops_when_round_retires_while_waiting():
     mgr = _make_mgr()
     round_id = await _owned_round(mgr)
+    mgr.tts_cache_lock = _SignalingLock()
 
     await mgr.tts_cache_lock.acquire()
+    mgr.tts_cache_lock.waiting.clear()
     feed_task = asyncio.create_task(
         LLMSessionManager.feed_tts_chunk(
             mgr, "stale proactive", expected_speech_id="s_proactive",
             expected_round_id=round_id,
         )
     )
-    await asyncio.sleep(0)
+    # Retire only once the task has passed the pre-lock check and is waiting,
+    # so this case exercises the in-lock recheck.
+    await mgr.tts_cache_lock.waiting.wait()
     await _retire_round(mgr)
     mgr.tts_cache_lock.release()
 
@@ -900,3 +918,23 @@ async def test_end_to_end_proactive_interrupted_by_user():
     enqueued_sids = {c.args[1]: c.args[0] for c in mgr._enqueue_tts_text_chunk.call_args_list}
     assert enqueued_sids["p_early"] == "s_proactive"
     assert enqueued_sids["u_reply"] == "s_user"
+
+
+@pytest.mark.parametrize("live_consent", [None, True, False])
+async def test_finish_proactive_delivery_stages_screenshot_only_under_live_consent(live_consent):
+    """A revoked round must not leave its screen for the next user turn."""
+    mgr = _make_mgr()
+    mgr.current_speech_id = "s_proactive"
+    mgr._proactive_vision_enabled = live_consent
+    mgr.session = MagicMock()
+    mgr.session._conversation_history = []
+
+    committed = await LLMSessionManager.finish_proactive_delivery(
+        mgr, "看到你在写代码", expected_speech_id="s_proactive",
+        vision_screenshot_b64="SHOT_B64",
+    )
+
+    assert committed is True
+    mgr.session.set_proactive_screenshot.assert_called_once_with(
+        None if live_consent is False else "SHOT_B64"
+    )

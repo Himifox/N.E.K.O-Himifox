@@ -424,14 +424,21 @@ async def _make_proactive_llm(
     disable_thinking: bool = True,
     live_consent_check: Callable[[], bool] | None = None,
     round_is_current: Callable[[], bool] | None = None,
+    vision_consent_required: bool = False,
 ):
-    """Create the configured proactive-chat model without owning lifecycle state."""
+    """Create the configured proactive-chat model without owning lifecycle state.
+
+    ``vision_consent_required`` gates a text-only call whose prompt carries
+    screen- or window-derived material the same way as an image call.
+    """
+    needs_vision_consent = use_vision or vision_consent_required
+
     def require_current_round() -> None:
         if round_is_current is not None and not round_is_current():
             raise PermissionError("Proactive round retired")
 
     require_current_round()
-    if use_vision:
+    if needs_vision_consent:
         await _check_proactive_vision_consent(live_consent_check)
     require_current_round()
     if use_vision and model_config.has_vision_model:
@@ -462,11 +469,11 @@ async def _make_proactive_llm(
         api_key,
         **kwargs,
     )
-    if use_vision or round_is_current is not None:
+    if needs_vision_consent or round_is_current is not None:
         # Client creation awaits a worker thread; consent may change while it runs.
         # The caller has not entered the client context yet, so denial owns cleanup.
         try:
-            if use_vision:
+            if needs_vision_consent:
                 await _check_proactive_vision_consent(live_consent_check)
             require_current_round()
         except BaseException:
@@ -491,6 +498,8 @@ async def _llm_call_with_retry(
     image_b64: str = "",
     dynamic_context: str = "",
     log: logging.Logger | None = None,
+    live_consent_check: Callable[[], bool] | None = None,
+    vision_consent_required: bool = False,
 ) -> str:
     """Call the proactive model with the established retry and message shape."""
     active_logger = log or logger
@@ -523,6 +532,8 @@ async def _llm_call_with_retry(
                 max_completion_tokens=max_completion_tokens,
                 use_vision=use_vision,
                 disable_thinking=disable_thinking,
+                live_consent_check=live_consent_check,
+                vision_consent_required=vision_consent_required,
             ) as llm:
                 response = await asyncio.wait_for(
                     llm.ainvoke(messages),
@@ -600,6 +611,8 @@ async def _run_unified_phase1(
     has_music_task: bool,
     has_meme_task: bool,
     log: logging.Logger | None = None,
+    live_consent_check: Callable[[], bool] | None = None,
+    vision_consent_required: bool = False,
 ) -> dict[str, Any]:
     """Build, call, and parse the unified Phase 1 model request."""
     active_logger = log or logger
@@ -635,6 +648,8 @@ async def _run_unified_phase1(
             system_prompt=prompt,
             label="unified_phase1",
             log=active_logger,
+            live_consent_check=live_consent_check,
+            vision_consent_required=vision_consent_required,
         )
         print(f"[{lanlan_name}] Phase 1 合并 LLM 结果: {result_text[:500]}")
         parsed = _parse_unified_phase1_result(result_text)
@@ -786,6 +801,7 @@ async def _run_phase2_generation(
     log: logging.Logger | None = None,
     vision_consent_epoch: int | None = None,
     round_is_current: Callable[[], bool] | None = None,
+    vision_consent_required: bool = False,
 ) -> Phase2GuardedOutput:
     """Own Phase 2 messages, model stream, and output guards."""
     active_logger = log or logger
@@ -832,6 +848,7 @@ async def _run_phase2_generation(
     make_llm = partial(
         _make_proactive_llm, model_config, live_consent_check=live_consent_check,
         round_is_current=round_is_current,
+        vision_consent_required=vision_consent_required,
     )
     silence_since_before_generation = _proactive_silence_since(mgr)
     generated = await _generate_phase2_stream(

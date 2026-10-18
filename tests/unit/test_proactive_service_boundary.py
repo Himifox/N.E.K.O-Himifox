@@ -1173,12 +1173,13 @@ async def test_screen_and_window_sources_follow_live_vision_consent(monkeypatch,
     monkeypatch.setattr(service, "collect_proactive_sources", fake_collect)
     requested = ["news"] if case == "no-vision-modes" else ["vision", "window", "news"]
 
-    modes, sources = await service._collect_sources_under_vision_consent(
+    modes, sources, withheld = await service._collect_sources_under_vision_consent(
         command=contracts.ProactiveChatCommand(lanlan_name="Yui"),
         enabled_modes=requested,
         lanlan_name="Yui",
         vision_consent_check=lambda: consent["enabled"],
     )
+    assert withheld is (case not in ("granted", "no-vision-modes"))
 
     if case in ("granted", "no-vision-modes"):
         assert collected_modes == [requested]
@@ -1201,3 +1202,44 @@ def test_service_collects_sources_only_through_the_vision_consent_gate() -> None
     handler_source = inspect.getsource(service.handle_proactive_chat)
     assert "_collect_sources_under_vision_consent(" in handler_source
     assert "collect_proactive_sources(" not in handler_source
+
+
+def test_service_rechecks_vision_consent_at_every_later_model_and_commit_boundary() -> None:
+    """Screen/window material collected earlier must not outlive a revocation."""
+    source = inspect.getsource(service.handle_proactive_chat)
+    withhold = source.index('stage="Phase 1 前"')
+    phase1 = source.index("_run_unified_phase1(")
+    phase2 = source.index("_run_phase2_generation(")
+    commit_check = source.index("vision consent revoked before delivery")
+    commit = source.index("_commit_proactive_delivery(")
+    assert withhold < phase1 < phase2 < commit_check < commit
+    phase1_call = source[phase1:source.index(")", source.index("vision_consent_required", phase1))]
+    assert "live_consent_check=vision_consent_check" in phase1_call
+    assert 'vision_consent_required="window" in sources' in phase1_call
+    assert "vision_consent_required=round_uses_vision_material" in source[phase2:commit_check]
+    assert (
+        "if round_uses_vision_material and await _vision_consent_declined(vision_consent_check):"
+        in source[phase2:commit_check]
+    )
+    assert "await _withhold_revoked_vision_sources(" in source[withhold - 200:withhold]
+    # Consent removing every source is a privacy pass, not a 500 source failure.
+    assert "vision consent revoked; no other source" in source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declined", [False, True])
+async def test_withhold_revoked_vision_sources_keeps_other_sources(monkeypatch, declined) -> None:
+    from utils import preferences
+
+    monkeypatch.setattr(
+        preferences, "aload_global_conversation_settings",
+        AsyncMock(return_value={"proactiveVisionEnabled": True}),
+    )
+    sources = {"vision": {}, "window": {}, "news": {}}
+
+    withheld = await service._withhold_revoked_vision_sources(
+        sources, lambda: not declined, lanlan_name="Yui", stage="test",
+    )
+
+    assert withheld is declined
+    assert set(sources) == ({"news"} if declined else {"vision", "window", "news"})

@@ -603,3 +603,60 @@ def test_retired_stream_cleanup_does_not_target_replacement_before_it_has_a_spee
 
     manager = SimpleNamespace(current_speech_id='old-speech', state=SessionStateMachine('test'))
     assert not _proactive_turn_still_owned(manager, 'old-speech')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('consent', ['granted', 'live-revoked', 'persisted-off'])
+async def test_text_call_carrying_screen_material_requires_vision_consent(monkeypatch, consent):
+    """Window-derived text sent to a text model needs the same consent as an image."""
+    from utils import preferences
+
+    read = AsyncMock(return_value={'proactiveVisionEnabled': consent != 'persisted-off'})
+    create = AsyncMock(return_value=SimpleNamespace(aclose=AsyncMock()))
+    monkeypatch.setattr(preferences, 'aload_global_conversation_settings', read)
+    monkeypatch.setattr(generation, 'create_chat_llm_async', create)
+    config = generation.ProactiveModelConfig(
+        conversation_model='text-test', conversation_base_url=None,
+        conversation_api_key='synthetic', conversation_provider_type=None,
+        vision_model='vision-test', vision_api_key='synthetic',
+    )
+    live = lambda: consent != 'live-revoked'  # noqa: E731
+
+    if consent == 'granted':
+        await generation._make_proactive_llm(
+            config, live_consent_check=live, vision_consent_required=True,
+        )
+        assert create.await_args.args[0] == 'text-test'
+        assert read.await_count == 2, 'checked before and after client creation'
+    else:
+        with pytest.raises(PermissionError):
+            await generation._make_proactive_llm(
+                config, live_consent_check=live, vision_consent_required=True,
+            )
+        create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unified_phase1_withholds_window_text_after_revocation(monkeypatch):
+    from utils import preferences
+
+    monkeypatch.setattr(
+        preferences, 'aload_global_conversation_settings',
+        AsyncMock(return_value={'proactiveVisionEnabled': True}),
+    )
+    create = AsyncMock()
+    monkeypatch.setattr(generation, 'create_chat_llm_async', create)
+    config = generation.ProactiveModelConfig(
+        conversation_model='text-test', conversation_base_url=None,
+        conversation_api_key='synthetic', conversation_provider_type=None,
+    )
+
+    parsed = await generation._run_unified_phase1(
+        model_config=config, proactive_lang='zh', lanlan_name='Yui', master_name='博士',
+        merged_web_content='--- 窗口 ---\nEditor', memory_context='', recent_chats_section='',
+        has_music_task=False, has_meme_task=False,
+        live_consent_check=lambda: False, vision_consent_required=True,
+    )
+
+    assert parsed == {'web': None, 'music_keyword': None, 'meme_keyword': None}
+    create.assert_not_awaited()

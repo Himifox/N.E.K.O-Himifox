@@ -738,6 +738,10 @@ class ProactiveMixin:
                 # 后，用户接管（sid 变→早 return）时
                 # 绝不会为未投递的轮次暂存截图。
                 if hasattr(self.session, "set_proactive_screenshot"):
+                    # A live revocation must not leave this round's screen for the
+                    # next user turn; staging None also clears an older screenshot.
+                    if getattr(self, "_proactive_vision_enabled", None) is False:
+                        vision_screenshot_b64 = None
                     self.session.set_proactive_screenshot(vision_screenshot_b64)
 
             # 防复读 corpus 拆成两半：内存更新在收尾信号**之前**（同步、无 await，
