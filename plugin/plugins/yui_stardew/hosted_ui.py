@@ -1,4 +1,4 @@
-"""Hosted UI connection diagnostics for the HimiYui bridge."""
+"""Hosted UI connection diagnostics for the YuiToIssho bridge."""
 
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ from plugin.sdk.plugin import Err, Ok, SdkError, plugin_entry, ui
 
 from .bridge import PROTOCOL_VERSION, BridgeError
 from .discovery import BridgeDiscoveryResult, discover_bridge_connection
+from .setup_ui import YuiStardewSetupUiMixin
 
 
-class YuiStardewHostedUiMixin:
-    """Expose connection management without creating a game-control surface."""
+class YuiStardewHostedUiMixin(YuiStardewSetupUiMixin):
+    """Expose setup and connection management without game-action buttons."""
 
     _runtime_config: dict[str, Any]
     _selected_instance_id: str
@@ -22,6 +23,7 @@ class YuiStardewHostedUiMixin:
 
     def _init_hosted_ui(self) -> None:
         self._hosted_ui_token = secrets.token_urlsafe(32)
+        self._init_setup_ui()
 
     def _valid_hosted_ui_token(self, candidate: object) -> bool:
         if not isinstance(candidate, str):
@@ -49,7 +51,7 @@ class YuiStardewHostedUiMixin:
                 "code": error.code,
                 "message": error.message,
                 "source": "compatibility_override",
-                "port": None,
+                "transport": "",
                 "instance_id": "",
                 "protocol_version": PROTOCOL_VERSION,
                 "verified_at": "",
@@ -75,6 +77,7 @@ class YuiStardewHostedUiMixin:
             "discovery": discovery_state,
             "connection": connection,
             "avatar": avatar_state,
+            "setup": await self._setup_snapshot(),
             "ui_token": self._hosted_ui_token,
         }
 
@@ -89,7 +92,7 @@ class YuiStardewHostedUiMixin:
     )
     @plugin_entry(
         id="yui_stardew_select_instance",
-        name="选择当前 HimiYui 实例",
+        name="选择当前 YuiToIssho 实例",
         description="仅供 Hosted UI 在多个已验证的本机实例中选择本次会话目标。",
         input_schema={
             "type": "object",
@@ -114,8 +117,16 @@ class YuiStardewHostedUiMixin:
             result = await discover_bridge_connection(self._runtime_config, instance_id)
         except BridgeError as error:
             return Err(SdkError(error.message, code=error.code))
-        if result.selected is None or result.selected.candidate.instance_id != instance_id:
-            return Err(SdkError("该实例已离线或未通过验证，请刷新后重试。", code="instance_unavailable"))
+        if (
+            result.selected is None
+            or result.selected.candidate.instance_id != instance_id
+        ):
+            return Err(
+                SdkError(
+                    "该实例已离线或未通过验证，请刷新后重试。",
+                    code="instance_unavailable",
+                )
+            )
         self._selected_instance_id = instance_id
         return Ok({"selected": True, "instance_id": instance_id})
 
@@ -131,7 +142,7 @@ class YuiStardewHostedUiMixin:
     @plugin_entry(
         id="yui_stardew_clear_compatibility_override",
         name="清除 Yui 桥兼容覆盖",
-        description="仅供 Hosted UI 清除旧版路径与手动密钥，恢复自动发现。",
+        description="仅供 Hosted UI 清除手动 WebSocket 端点、密钥与旧版路径，恢复自动发现。",
         input_schema={
             "type": "object",
             "properties": {
@@ -151,10 +162,13 @@ class YuiStardewHostedUiMixin:
             return Err(SdkError("该操作只能从插件 Hosted UI 调用。", code="ui_only"))
         try:
             await self.config.set("yui_stardew.himi_yui_config_path", "", timeout=5.0)
+            await self.config.set("yui_stardew.endpoint", "", timeout=5.0)
             await self.config.set("yui_stardew.token", "", timeout=5.0)
             await self._load_config()
         except Exception as error:  # noqa: BLE001
-            return Err(SdkError(f"清除兼容覆盖失败：{error}", code="config_save_failed"))
+            return Err(
+                SdkError(f"清除兼容覆盖失败：{error}", code="config_save_failed")
+            )
         self._selected_instance_id = ""
         return Ok({"cleared": True})
 

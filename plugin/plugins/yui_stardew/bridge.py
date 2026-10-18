@@ -7,23 +7,32 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from websockets.asyncio.client import connect as websocket_connect
+from websockets.exceptions import (
+    ConnectionClosed,
+    InvalidHandshake,
+    InvalidURI,
+    PayloadTooBig,
+)
+
 
 PROTOCOL_VERSION = 2
-DEFAULT_PORT = 48910
+GATEWAY_PATH = "/yuitoissho/agent/v2"
 MAXIMUM_REQUEST_BYTES = 8 * 1024
 MAXIMUM_RESPONSE_BYTES = 32 * 1024
 
 
 @dataclass(frozen=True, slots=True)
 class BridgeSettings:
-    port: int = DEFAULT_PORT
+    endpoint: str = ""
     token: str = field(default="", repr=False)
     connect_timeout_seconds: float = 3.0
     request_timeout_seconds: float = 6.0
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "BridgeSettings":
-        port = _bounded_int(value.get("port"), DEFAULT_PORT, minimum=1024, maximum=65535)
+        endpoint_value = value.get("endpoint", "")
+        endpoint = endpoint_value.strip() if isinstance(endpoint_value, str) else ""
         token_value = value.get("token", "")
         token = token_value if isinstance(token_value, str) else ""
         connect_timeout = _bounded_float(
@@ -33,7 +42,7 @@ class BridgeSettings:
             value.get("request_timeout_seconds"), 6.0, minimum=1.0, maximum=30.0
         )
         return cls(
-            port=port,
+            endpoint=endpoint,
             token=token,
             connect_timeout_seconds=connect_timeout,
             request_timeout_seconds=request_timeout,
@@ -41,7 +50,7 @@ class BridgeSettings:
 
     @property
     def configured(self) -> bool:
-        return 16 <= len(self.token) <= 256
+        return bool(self.endpoint) and 16 <= len(self.token) <= 256
 
 
 class BridgeError(RuntimeError):
@@ -67,7 +76,7 @@ class YuiStardewBridgeClient:
         if not self.configured:
             raise BridgeError(
                 "BRIDGE-NOT-CONFIGURED",
-                "请先启动一次装有 HimiYui 的 Stardew Valley；插件会自动发现本机桥。",
+                "请启动装有新版 YuiToIssho 的 Stardew Valley；插件会自动发现本机 Agent Gateway。",
             )
 
         request_id = uuid.uuid4().hex
@@ -78,67 +87,73 @@ class YuiStardewBridgeClient:
             "action": action,
             "arguments": dict(arguments or {}),
         }
-        payload = json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
-        if len(payload) > MAXIMUM_REQUEST_BYTES:
+        payload = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+        if len(payload.encode("utf-8")) > MAXIMUM_REQUEST_BYTES:
             raise BridgeError("REQUEST-TOO-LARGE", "Yui 请求超过 8 KiB 限制。")
 
-        writer: asyncio.StreamWriter | None = None
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", self._settings.port, limit=MAXIMUM_RESPONSE_BYTES + 1),
-                timeout=self._settings.connect_timeout_seconds,
-            )
-            writer.write(payload)
-            await asyncio.wait_for(writer.drain(), timeout=self._settings.connect_timeout_seconds)
-            response_line = await asyncio.wait_for(
-                reader.readline(), timeout=self._settings.request_timeout_seconds
-            )
+            async with websocket_connect(
+                self._settings.endpoint,
+                open_timeout=self._settings.connect_timeout_seconds,
+                close_timeout=1.0,
+                max_size=MAXIMUM_RESPONSE_BYTES,
+                ping_interval=20.0,
+                ping_timeout=20.0,
+            ) as websocket:
+                await asyncio.wait_for(
+                    websocket.send(payload),
+                    timeout=self._settings.connect_timeout_seconds,
+                )
+                raw_response = await asyncio.wait_for(
+                    websocket.recv(),
+                    timeout=self._settings.request_timeout_seconds,
+                )
         except TimeoutError as error:
-            raise BridgeError("BRIDGE-TIMEOUT", "HimiYui 本机桥响应超时。") from error
-        except (ConnectionError, OSError) as error:
+            raise BridgeError(
+                "BRIDGE-TIMEOUT", "YuiToIssho Agent Gateway 响应超时。"
+            ) from error
+        except PayloadTooBig as error:
+            raise BridgeError(
+                "INVALID-RESPONSE", "YuiToIssho 响应超过 32 KiB 限制。"
+            ) from error
+        except (ConnectionClosed, InvalidHandshake, InvalidURI, OSError) as error:
             raise BridgeError(
                 "BRIDGE-UNAVAILABLE",
-                "无法连接 HimiYui；请确认 Stardew Valley、模组桥和端口已经启动。",
+                "无法连接 YuiToIssho；请确认 Stardew Valley 与 Agent Gateway 已启动。",
             ) from error
-        finally:
-            if writer is not None:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except (ConnectionError, OSError):
-                    pass
 
-        if not response_line:
-            raise BridgeError("EMPTY-RESPONSE", "HimiYui 本机桥关闭了空响应连接。")
-        if len(response_line) > MAXIMUM_RESPONSE_BYTES or not response_line.endswith(b"\n"):
-            raise BridgeError("INVALID-RESPONSE", "HimiYui 响应不完整或超过 32 KiB 限制。")
+        if not isinstance(raw_response, str):
+            raise BridgeError(
+                "INVALID-RESPONSE", "YuiToIssho 返回了不受支持的二进制消息。"
+            )
+        if len(raw_response.encode("utf-8")) > MAXIMUM_RESPONSE_BYTES:
+            raise BridgeError("INVALID-RESPONSE", "YuiToIssho 响应超过 32 KiB 限制。")
         try:
-            response = json.loads(response_line.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise BridgeError("INVALID-RESPONSE", "HimiYui 返回了无效 JSON。") from error
+            response = json.loads(raw_response)
+        except json.JSONDecodeError as error:
+            raise BridgeError(
+                "INVALID-RESPONSE", "YuiToIssho 返回了无效 JSON。"
+            ) from error
         if not isinstance(response, dict):
-            raise BridgeError("INVALID-RESPONSE", "HimiYui 响应不是 JSON 对象。")
-        if response.get("protocol_version") != PROTOCOL_VERSION or response.get("request_id") != request_id:
-            raise BridgeError("RESPONSE-MISMATCH", "HimiYui 响应版本或请求 ID 不匹配。")
-        if not isinstance(response.get("ok"), bool) or not isinstance(response.get("code"), str):
-            raise BridgeError("INVALID-RESPONSE", "HimiYui 响应缺少结构化结果。")
+            raise BridgeError("INVALID-RESPONSE", "YuiToIssho 响应不是 JSON 对象。")
+        if (
+            response.get("protocol_version") != PROTOCOL_VERSION
+            or response.get("request_id") != request_id
+        ):
+            raise BridgeError("RESPONSE-MISMATCH", "YuiToIssho 响应版本或请求 ID 不匹配。")
+        if not isinstance(response.get("ok"), bool) or not isinstance(
+            response.get("code"), str
+        ):
+            raise BridgeError("INVALID-RESPONSE", "YuiToIssho 响应缺少结构化结果。")
         state = response.get("state")
         if state is not None and not isinstance(state, dict):
-            raise BridgeError("INVALID-RESPONSE", "HimiYui 状态快照格式无效。")
+            raise BridgeError("INVALID-RESPONSE", "YuiToIssho 状态快照格式无效。")
         return response
 
 
-def _bounded_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool):
-        return default
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if minimum <= parsed <= maximum else default
-
-
-def _bounded_float(value: Any, default: float, *, minimum: float, maximum: float) -> float:
+def _bounded_float(
+    value: Any, default: float, *, minimum: float, maximum: float
+) -> float:
     if isinstance(value, bool):
         return default
     try:

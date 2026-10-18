@@ -1,0 +1,7 @@
+[project]
+name = "neko-plugin-yui-stardew"
+version = "0.1.4"
+requires-python = ">=3.11"
+# Runs in N.E.K.O's Python 3.11 host, which supplies websockets, psutil,
+# portalocker and (on Windows) pywin32. Do not install a second native runtime.
+dependencies = ["N.E.K.O"]

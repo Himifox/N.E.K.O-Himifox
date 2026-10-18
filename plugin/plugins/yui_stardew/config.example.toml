@@ -3,9 +3,10 @@ enabled = true
 auto_start = true
 
 [yui_stardew]
-# 以下三项仅供旧版兼容覆盖；正常使用保持默认和空值。
-port = 48910
+# 由安装向导保存的 Steam 游戏目录；留空时自动检测。
+game_path = ""
+# 以下两项仅供手动诊断覆盖；正常使用保持为空并依赖自动发现。
+endpoint = ""
 token = ""
-himi_yui_config_path = ""
 connect_timeout_seconds = 3.0
 request_timeout_seconds = 6.0

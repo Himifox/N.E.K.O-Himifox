@@ -1,8 +1,8 @@
 [plugin]
 id = "yui_stardew"
 name = "Yui 星露谷驱动"
-description = "通过仅限本机的鉴权桥，让 N.E.K.O 驱动 HimiYui 执行召唤、跟随、等待和持续工作。"
-short_description = "Drive HimiYui in Stardew Valley through an authenticated localhost bridge."
+description = "通过本机 WebSocket Agent Gateway，让 N.E.K.O 驱动 YuiToIssho 执行召唤、跟随、等待和持续工作。"
+short_description = "Drive YuiToIssho through its authenticated local WebSocket Agent Gateway."
 keywords = [
   "yui",
   "stardew",
@@ -13,7 +13,7 @@ keywords = [
   "现在能进了",
   "我弄好了",
 ]
-version = "0.1.2"
+version = "0.1.4"
 type = "plugin"
 entry = "plugin.plugins.yui_stardew:YuiStardewPlugin"
 
