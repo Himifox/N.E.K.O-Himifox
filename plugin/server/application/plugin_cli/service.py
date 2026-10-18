@@ -28,7 +28,11 @@ from plugin.server.application.install_source import (
     get_install_source_manager,
 )
 from plugin.server.application.plugin_cli.paths import PluginCliPathPolicy
-from plugin.server.application.plugin_cli.install_plan import PluginInstallPlan, build_install_plan
+from plugin.server.application.plugin_cli.install_plan import (
+    PluginInstallPlan,
+    build_install_plan,
+    is_config_only_runtime_dir,
+)
 from plugin.server.application.plugins import upgrade_support
 from plugin.server.application.plugins.operation_lock import serialized_plugin_operation
 from plugin.server.application.plugin_cli.source_resolver import (
@@ -427,6 +431,7 @@ class PluginCliService:
         if content is not None and package_path is not None:
             raise ValueError("upload_and_install accepts content or package_path, not both")
 
+        preserved_runtime_dirs = self._config_only_runtime_dirs()
         if install_source_override is None:
             owns_saved_package = content is not None or package_path is not None
             saved: dict[str, object] | None = None
@@ -476,6 +481,7 @@ class PluginCliService:
                     saved=saved,
                     unpacked_target_dirs=unpacked_target_dirs,
                     unpacked_profile_dirs=unpacked_profile_dirs,
+                    preserved_runtime_dirs=preserved_runtime_dirs,
                     delete_saved_package=owns_saved_package,
                 )
                 raise
@@ -691,6 +697,7 @@ class PluginCliService:
                 saved=saved,
                 unpacked_target_dirs=unpacked_target_dirs,
                 unpacked_profile_dirs=unpacked_profile_dirs,
+                preserved_runtime_dirs=preserved_runtime_dirs,
                 delete_saved_package=owns_saved_package,
             )
             raise
@@ -699,6 +706,7 @@ class PluginCliService:
                 saved=saved,
                 unpacked_target_dirs=unpacked_target_dirs,
                 unpacked_profile_dirs=unpacked_profile_dirs,
+                preserved_runtime_dirs=preserved_runtime_dirs,
                 delete_saved_package=owns_saved_package,
             )
             raise
@@ -836,12 +844,23 @@ class PluginCliService:
             "package_sha256": actual_sha256,
         }
 
+    def _config_only_runtime_dirs(self) -> frozenset[Path]:
+        root = self._path_policy().user_plugins_root
+        if not root.is_dir():
+            return frozenset()
+        return frozenset(
+            path.resolve()
+            for path in root.iterdir()
+            if is_config_only_runtime_dir(path, plugin_id=path.name)
+        )
+
     def _cleanup_after_failure(
         self,
         *,
         saved: dict[str, object] | None,
         unpacked_target_dirs: list[Path] | None = None,
         unpacked_profile_dirs: list[Path] | None = None,
+        preserved_runtime_dirs: frozenset[Path] = frozenset(),
         delete_saved_package: bool = True,
     ) -> None:
         """Best-effort fs cleanup on upload_and_install failure (R3.6).
@@ -854,7 +873,21 @@ class PluginCliService:
         """
 
         for unpacked_target_dir in unpacked_target_dirs or []:
-            self._cleanup_failed_unpack(unpacked_target_dir)
+            if unpacked_target_dir.resolve() in preserved_runtime_dirs:
+                # Staging adopted this pre-existing runtime directory. A later
+                # metadata/lock failure may remove only the added payload.
+                try:
+                    for child in unpacked_target_dir.iterdir():
+                        if child.name == "config":
+                            continue
+                        if child.is_dir() and not child.is_symlink():
+                            self._cleanup_failed_unpack(child)
+                        else:
+                            child.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("upload_and_install: failed to clean up adopted runtime payload: {}", exc)
+            else:
+                self._cleanup_failed_unpack(unpacked_target_dir)
         for unpacked_profile_dir in unpacked_profile_dirs or []:
             self._cleanup_failed_unpack(unpacked_profile_dir)
         if delete_saved_package and saved is not None:
@@ -1241,6 +1274,7 @@ class PluginCliService:
         staging_profiles.mkdir(parents=True, exist_ok=True)
         installer = PackageInstaller()
         promoted_plugins: list[InstalledPlugin] = []
+        promoted_paths: list[Path] = []
         promoted_profile: Path | None = None
 
         try:
@@ -1255,12 +1289,25 @@ class PluginCliService:
                 source_dir = Path(item.target_dir)
                 desired_name = forced_directory_name or item.target_plugin_id
                 desired = plugins_root / desired_name
-                final_dir = installer.resolve_plugin_target_dir(
-                    desired,
-                )
-                if source_dir.resolve() != final_dir.resolve():
+                manifest = tomllib.loads((source_dir / "plugin.toml").read_text(encoding="utf-8"))
+                plugin_id = manifest["plugin"]["id"]
+                if is_config_only_runtime_dir(desired, plugin_id=plugin_id):
+                    # Keep runtime configuration in place. Only promote new
+                    # code entries, and roll back those entries alone on failure.
+                    if (source_dir / "config").exists():
+                        raise FileExistsError("package would overwrite existing runtime configuration")
+                    final_dir = desired.resolve()
+                    for child in sorted(source_dir.iterdir(), key=lambda path: (path.name == "plugin.toml", path.name)):
+                        destination = final_dir / child.name
+                        if destination.exists():
+                            raise FileExistsError(f"plugin target already exists: {destination.name}")
+                        child.rename(destination)
+                        promoted_paths.append(destination)
+                else:
+                    final_dir = installer.resolve_plugin_target_dir(desired)
                     final_dir.parent.mkdir(parents=True, exist_ok=True)
                     source_dir.rename(final_dir)
+                    promoted_paths.append(final_dir)
                 promoted_plugins.append(
                     InstalledPlugin(
                         source_folder=item.source_folder,
@@ -1297,8 +1344,11 @@ class PluginCliService:
                 conflict_strategy=on_conflict,
             )
         except Exception:
-            for item in promoted_plugins:
-                shutil.rmtree(item.target_dir, ignore_errors=True)
+            for path in reversed(promoted_paths):
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
             if promoted_profile is not None:
                 shutil.rmtree(promoted_profile, ignore_errors=True)
             raise

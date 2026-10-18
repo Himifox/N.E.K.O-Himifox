@@ -4,8 +4,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import chain
 from pathlib import Path
 import shutil
+import stat
 
 from plugin.core.plugin_layout import PluginLayout
 from plugin.logging_config import get_logger
@@ -130,6 +132,32 @@ async def _restore_manifest_adjacent_profiles(backup_dir: Path, target_dir: Path
             raise OSError(f"unsupported profile path: {source}")
         await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(shutil.copy2, source, target)
+
+
+async def _restore_colocated_runtime_state(layout: PluginLayout, backup_dir: Path) -> None:
+    # User-installed payload and runtime storage may share the same directory.
+    # External state never moves, but colocated state is part of the backup and
+    # must be restored before restarting or deleting that backup.
+    for state_dir in (layout.config_path.parent, layout.data_dir, layout.cache_dir):
+        try:
+            relative_path = state_dir.relative_to(layout.installed_dir)
+        except ValueError:
+            continue
+        source = backup_dir / relative_path
+        try:
+            source.lstat()
+        except FileNotFoundError:
+            continue
+        for path in chain((source,), source.rglob("*")):
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or (
+                getattr(metadata, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            ):
+                raise OSError(f"redirected runtime state is not supported: {path}")
+        if not source.is_dir():
+            raise NotADirectoryError(source)
+        await merge_directory_contents(source, layout.installed_dir / relative_path)
 
 
 async def run_rollback(
@@ -283,6 +311,7 @@ async def replace_plugin(
         stage = "validate"
         await validate_new()
         stage = "preserve"
+        await _restore_colocated_runtime_state(layout, backup_dir)
         for target in preserve_targets:
             backup = backups.get(target)
             if backup is not None:

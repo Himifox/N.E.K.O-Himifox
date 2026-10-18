@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
+import stat
 import tomllib
 from typing import Literal
 import zipfile
@@ -97,9 +98,10 @@ def build_install_plan(*, package_path: Path, plugins_root: Path) -> PluginInsta
 
     target_dir = plugins_root / directory_name
     matching = installed.get(plugin_id, [])
+    runtime_only = is_config_only_runtime_dir(target_dir, plugin_id=plugin_id)
     if target_dir.exists():
         target_manifest = _read_manifest(target_dir / "plugin.toml")
-        if _plugin_text(target_manifest, "id") != plugin_id:
+        if _plugin_text(target_manifest, "id") != plugin_id and not runtime_only:
             return _blocked(
                 inspected.package_id,
                 plugin_id,
@@ -115,7 +117,7 @@ def build_install_plan(*, package_path: Path, plugins_root: Path) -> PluginInsta
             reason="multiple_installations",
             directory_name=directory_name,
         )
-    if not target_dir.exists():
+    if not target_dir.exists() or runtime_only:
         return PluginInstallPlan(
             action="install",
             package_type="plugin",
@@ -142,6 +144,45 @@ def build_install_plan(*, package_path: Path, plugins_root: Path) -> PluginInsta
         reason="",
         legacy_plugin_ids=(),
     )
+
+
+def is_config_only_runtime_dir(target_dir: Path, *, plugin_id: str) -> bool:
+    """Recognize the narrow runtime layout that can precede code installation.
+
+    The same storage root holds installed packages and built-in plugin state.
+    Only the known config-only shape with a matching runtime table is safe to
+    adopt; an absent manifest alone is never evidence of ownership.
+    """
+    config_dir = target_dir / "config"
+    config_path = config_dir / "plugin.toml"
+    try:
+        config_entries = set(config_dir.iterdir())
+        lock_path = config_dir / "plugin.toml.lock"
+        if config_entries not in ({config_path}, {config_path, lock_path}):
+            return False
+        for path in (target_dir, config_dir, *config_entries):
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or (
+                getattr(metadata, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            ):
+                return False
+        if target_dir.name != plugin_id or not target_dir.is_dir() or not config_dir.is_dir():
+            return False
+        if set(target_dir.iterdir()) != {config_dir}:
+            return False
+        if not config_path.is_file():
+            return False
+        if lock_path in config_entries and (not lock_path.is_file() or lock_path.stat().st_size != 0):
+            return False
+        config = _read_manifest(config_path)
+        return (
+            isinstance(config.get(plugin_id), dict)
+            and set(config) <= {"plugin_runtime", plugin_id}
+            and ("plugin_runtime" not in config or isinstance(config["plugin_runtime"], dict))
+        )
+    except (OSError, ValueError):
+        return False
 
 
 def _blocked(

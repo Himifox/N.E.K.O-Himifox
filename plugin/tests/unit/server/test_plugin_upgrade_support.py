@@ -69,6 +69,119 @@ async def test_replace_plugin_replaces_only_payload_and_preserves_external_user_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", [None, "install", "preserve", "restart"])
+async def test_replace_plugin_preserves_colocated_runtime_state_and_rolls_back_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str | None,
+) -> None:
+    from plugin.server.application.plugins import upgrade_support
+
+    target = tmp_path / "plugins" / "demo"
+    target.mkdir(parents=True)
+    (target / "plugin.toml").write_text("version = 1\n", encoding="utf-8")
+    expected_state = {
+        target / "config" / "plugin.toml": b"[demo]\ncustom = 'keep'\n# keep comments\n",
+        target / "data" / "database.bin": b"\x00user data\xff",
+        target / "cache" / "cached.txt": b"cache data\n",
+    }
+    for path, content in expected_state.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    starts = 0
+
+    async def install_new() -> dict[str, object]:
+        target.mkdir()
+        (target / "plugin.toml").write_text("version = 2\n", encoding="utf-8")
+        if failure_stage == "install":
+            raise OSError("install denied")
+        return {"installed": True}
+
+    async def start(_plugin_id: str) -> None:
+        nonlocal starts
+        starts += 1
+        for path, content in expected_state.items():
+            assert path.read_bytes() == content
+        if failure_stage == "restart" and starts == 1:
+            raise RuntimeError("restart failed")
+
+    if failure_stage == "preserve":
+        async def fail_preserve(_source: Path, _target: Path) -> None:
+            raise PermissionError("preserve denied")
+        monkeypatch.setattr(upgrade_support, "merge_directory_contents", fail_preserve)
+
+    async def running(_plugin_id: str) -> bool:
+        return True
+
+    async def replace() -> None:
+        await replace_plugin(
+            layout=resolve_plugin_layout("demo", target, storage_root=tmp_path),
+            install_new=install_new,
+            validate_new=_async_none,
+            is_running=running,
+            stop=lambda _plugin_id: _async_none(),
+            start=start,
+            cleanup_backup=remove_directory,
+        )
+
+    if failure_stage:
+        with pytest.raises(ReplacePluginError) as exc_info:
+            await replace()
+        assert exc_info.value.stage == failure_stage
+        assert exc_info.value.rollback_status == "completed"
+    else:
+        await replace()
+    expected_version = 1 if failure_stage else 2
+    assert (target / "plugin.toml").read_text(encoding="utf-8") == f"version = {expected_version}\n"
+    for path, content in expected_state.items():
+        assert path.read_bytes() == content
+    assert not list((target.parent / ".upgrade-backups").glob("demo.bak.*"))
+
+
+@pytest.mark.asyncio
+async def test_failed_colocated_state_restore_keeps_recoverable_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "plugins" / "demo"
+    target.mkdir(parents=True)
+    (target / "plugin.toml").write_bytes(b"version = 1\n")
+    config = target / "config" / "plugin.toml"
+    config.parent.mkdir()
+    original_config = b"[demo]\ncustom = 'keep'\n"
+    config.write_bytes(original_config)
+    original_rename = Path.rename
+
+    def fail_restore(source: Path, destination: Path) -> Path:
+        if source.parent.name == ".upgrade-backups":
+            raise PermissionError("backup restore denied")
+        return original_rename(source, destination)
+
+    async def fail_install() -> dict[str, object]:
+        target.mkdir()
+        raise OSError("install denied")
+
+    monkeypatch.setattr(Path, "rename", fail_restore)
+    with pytest.raises(ReplacePluginError) as exc_info:
+        await replace_plugin(
+            layout=resolve_plugin_layout("demo", target, storage_root=tmp_path),
+            install_new=fail_install,
+            validate_new=_async_none,
+            is_running=lambda _plugin_id: _async_false(),
+            stop=lambda _plugin_id: _async_none(),
+            start=lambda _plugin_id: _async_none(),
+            cleanup_backup=remove_directory,
+        )
+
+    assert exc_info.value.stage == "install"
+    assert exc_info.value.rollback_status == "incomplete"
+    backups = list((target.parent / ".upgrade-backups").glob("demo.bak.*"))
+    assert len(backups) == 1
+    assert (backups[0] / "config" / "plugin.toml").read_bytes() == original_config
+    assert (backups[0] / "plugin.toml").read_bytes() == b"version = 1\n"
+
+
+@pytest.mark.asyncio
 async def test_replace_plugin_preserves_manifest_adjacent_user_profiles(
     tmp_path: Path,
 ) -> None:
@@ -158,11 +271,13 @@ async def test_replace_plugin_rejects_manifest_adjacent_profile_symlinks(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("colocated", [False, True])
 async def test_replace_plugin_initializes_runtime_config_from_old_payload_before_backup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    colocated: bool,
 ) -> None:
-    storage_root = tmp_path / "state"
+    storage_root = tmp_path if colocated else tmp_path / "state"
     monkeypatch.setenv("NEKO_STORAGE_SELECTED_ROOT", str(storage_root))
     target = tmp_path / "plugins" / "demo"
     target.mkdir(parents=True)
