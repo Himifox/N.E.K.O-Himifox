@@ -816,8 +816,8 @@ class VRMInteraction {
             if (e.code === 'Tab' && !hasCommandModifier) return;
             // Controls own their activation/navigation keys, not ordinary F/G
             // bindings merely because a preceding click left them focused.
-            if (!hasCommandModifier && ['Enter', 'Space', 'Escape', 'ArrowUp', 'ArrowDown',
-                'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.code)
+            if (!hasCommandModifier && ['Enter', 'NumpadEnter', 'Space', 'Escape', 'ArrowUp',
+                'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.code)
                 && this._isKeyboardInteractiveTarget(e.target)) return;
             const shortcut = window.nekoVrmGuidedMovementShortcut;
             if (shortcut === undefined) {

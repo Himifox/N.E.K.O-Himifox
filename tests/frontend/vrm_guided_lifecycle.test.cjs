@@ -638,7 +638,7 @@ const vm = require('node:vm');
         ...['link', 'checkbox', 'radio', 'switch', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
             'option', 'tab', 'slider', 'spinbutton'].map(role => keyboardElement('div', { role }))];
     for (const target of keyboardControls) {
-        for (const code of ['Enter', 'Space']) {
+        for (const code of ['Enter', 'NumpadEnter', 'Space']) {
             for (const shiftKey of [false, true]) {
                 const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut(code, { shiftKey });
                 assert.equal(keyDown(code, { target, shiftKey }).prevented, false, code + ' preserves focused control activation');
@@ -679,7 +679,7 @@ const vm = require('node:vm');
         }
     }
     for (const modifier of ['ctrlKey', 'altKey', 'metaKey']) {
-        for (const code of ['Enter', 'Space', 'Escape', 'ArrowDown', 'Home']) {
+        for (const code of ['Enter', 'NumpadEnter', 'Space', 'Escape', 'ArrowDown', 'Home']) {
             for (const target of [...nativeKeyboardInputs, keyboardElement('button'), keyboardElement('canvas', { tabindex: '0' })]) {
                 const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut(code, { [modifier]: true });
                 assert.equal(keyDown(code, { target, [modifier]: true }).prevented, true, 'command-modified actions can be explicitly configured');
@@ -736,7 +736,7 @@ const vm = require('node:vm');
     // noninteractive anchors and programmatic-focus containers remain usable.
     for (const target of [keyboardElement('canvas', { tabindex: '0' }), keyboardElement('a'),
         keyboardElement('div', { tabindex: '-1' }), keyboardElement('div', { role: 'presentation' })]) {
-        for (const configured of [undefined, ...['Enter', 'Space', 'Escape', 'ArrowDown', 'Home'].map(code => shortcut(code)), shortcut('KeyG', { ctrlKey: true })]) {
+        for (const configured of [undefined, ...['Enter', 'NumpadEnter', 'Space', 'Escape', 'ArrowDown', 'Home'].map(code => shortcut(code)), shortcut('KeyG', { ctrlKey: true })]) {
             const f = fixture(); window.nekoVrmGuidedMovementShortcut = configured;
             const code = configured?.code || 'KeyF';
             const event = keyDown(code, { target, ctrlKey: configured?.ctrlKey || false });
