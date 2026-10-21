@@ -328,13 +328,18 @@ class VRMInteraction {
     _isEditableTarget(target) {
         if (target?.isContentEditable) return true;
         if (!target || typeof target.closest !== 'function') return false;
-        return !!target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]');
+        if (target.closest('textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return true;
+        const input = target.closest('input');
+        // Use the normalized DOM type: missing/invalid types remain text, while
+        // numeric and date/time editors keep their editing keys as well.
+        return !!input && !['button', 'checkbox', 'color', 'file', 'hidden', 'image',
+            'radio', 'range', 'reset', 'submit'].includes(input.type);
     }
 
     _isKeyboardInteractiveTarget(target) {
         if (this._isEditableTarget(target)) return true;
         if (!target || typeof target.closest !== 'function') return false;
-        return !!target.closest('button, a[href], summary, audio[controls], video[controls], '
+        return !!target.closest('input, button, a[href], summary, audio[controls], video[controls], '
             + '[role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], '
             + '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], '
             + '[role="tab"], [role="slider"], [role="spinbutton"], [tabindex]:not([tabindex="-1"]):not(canvas)');
