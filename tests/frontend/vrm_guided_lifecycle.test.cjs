@@ -9,7 +9,15 @@ const vm = require('node:vm');
     const frames = new Map();
     let frameId = 0;
     const events = { addEventListener() {}, removeEventListener() {} };
-    const window = { THREE, ...events, NekoModelTouchGestures: { installThree: () => ({ dispose() {} }) } };
+    const listeners = new Map();
+    const window = { THREE,
+        addEventListener(type, handler) {
+            if (!listeners.has(type)) listeners.set(type, new Set());
+            listeners.get(type).add(handler);
+        },
+        removeEventListener(type, handler) { listeners.get(type)?.delete(handler); },
+        dispatchEvent(event) { for (const handler of [...(listeners.get(event.type) || [])]) handler(event); },
+        NekoModelTouchGestures: { installThree: () => ({ dispose() {} }) } };
     const context = vm.createContext({ window, console, performance: { now: () => 0 },
         document: { ...events, body: { classList: { contains: () => false } } },
         requestAnimationFrame(callback) { frames.set(++frameId, callback); return frameId; },
@@ -26,6 +34,9 @@ const vm = require('node:vm');
     };
     function fixture() {
         assert.equal(frames.size, 0, 'previous case must not leave animation frames');
+        assert.equal(listeners.get('neko:vrm-guided-movement-shortcut-changed')?.size || 0, 0,
+            'previous model must release its shortcut listener');
+        delete window.nekoVrmGuidedMovementShortcut;
         const leases = new Map();
         window.electronScreen = null;
         window.screen = { width: 1920, height: 1080 };
@@ -571,6 +582,141 @@ const vm = require('node:vm');
         assert.equal(f.interaction.targetMode, false);
         f.interaction._movementKeyDownHandler({ key: 'f', code: 'KeyA', preventDefault() {} });
         assert.equal(f.interaction.targetMode, false, 'another physical key cannot activate F');
+        f.interaction.cleanupDragAndZoom();
+    }
+    const shortcut = (code, modifiers = {}) => ({ code, ctrlKey: false, altKey: false,
+        shiftKey: false, metaKey: false, ...modifiers });
+    const keyDown = (code, options = {}) => {
+        const event = { type: 'keydown', code, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false,
+            prevented: false, preventDefault() { this.prevented = true; }, ...options };
+        window.dispatchEvent(event); return event;
+    };
+    const keyUp = (code, options = {}) => window.dispatchEvent({ type: 'keyup', code,
+        ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...options });
+
+    // Browser compatibility keeps Shift+physical-F, while an explicit setting
+    // matches every modifier exactly and can be cleared or restored in-place.
+    {
+        const f = fixture(); const canvas = f.manager.renderer.domElement;
+        assert.equal(keyDown('KeyF', { shiftKey: true }).prevented, true);
+        assert.equal(f.interaction._movementHeldCode, 'KeyF');
+        keyUp('ShiftLeft'); assert.equal(f.interaction.targetMode, true, 'legacy Shift is optional');
+        keyUp('KeyF'); assert.equal(f.interaction._movementHeldCode, null);
+        window.nekoVrmGuidedMovementShortcut = shortcut('KeyG');
+        assert.equal(keyDown('KeyF').prevented, false);
+        assert.equal(keyDown('KeyG', { shiftKey: true }).prevented, false);
+        assert.equal(f.interaction.targetMode, false);
+        assert.equal(keyDown('KeyG', { key: 'г' }).prevented, true);
+        assert.equal(f.interaction._movementHeldCode, 'KeyG');
+        keyUp('KeyF'); assert.equal(f.interaction.targetMode, true, 'unrelated release cannot disarm G');
+        keyUp('KeyG'); assert.equal(canvas.style.cursor, 'default');
+        window.nekoVrmGuidedMovementShortcut = null;
+        assert.equal(keyDown('KeyG').prevented, false);
+        assert.equal(keyDown('KeyF').prevented, false);
+        assert.equal(f.interaction.targetMode, false);
+        window.nekoVrmGuidedMovementShortcut = shortcut('KeyF');
+        assert.equal(keyDown('KeyF').prevented, true, 'restoring F activates its explicit setting');
+        keyUp('KeyF'); f.interaction.cleanupDragAndZoom();
+    }
+    // Required modifiers may be released before the main key; unrelated keys
+    // and releasing one of two still-held modifier keys do not end selection.
+    for (const [modifier, code] of [['ctrlKey', 'Control'], ['altKey', 'Alt'], ['shiftKey', 'Shift'], ['metaKey', 'Meta']]) {
+        const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut('KeyG', { [modifier]: true });
+        assert.equal(keyDown('KeyG').prevented, false);
+        assert.equal(keyDown('KeyG', { [modifier]: true }).prevented, true);
+        keyUp('KeyA', { [modifier]: true }); assert.equal(f.interaction.targetMode, true);
+        keyUp(code + 'Left', { [modifier]: true }); assert.equal(f.interaction.targetMode, true);
+        keyUp(code + 'Right'); assert.equal(f.interaction.targetMode, false);
+        assert.equal(f.interaction._movementHeldCode, null);
+        assert.equal(f.manager.renderer.domElement.style.cursor, 'default');
+        assert.equal(keyDown('KeyG', { [modifier]: true, repeat: true }).prevented, false);
+        assert.equal(f.interaction.targetMode, false, 'a held main key cannot rearm after releasing its modifier');
+        assert.equal(keyDown('KeyG', { [modifier]: true }).prevented, true);
+        keyUp('KeyG', { [modifier]: true }); assert.equal(f.interaction.targetMode, false);
+        f.interaction.cleanupDragAndZoom();
+    }
+    // Changing, clearing or resetting a shortcut while Ctrl+G is held must run
+    // the actual configuration listener: exit selection without cancelling the
+    // confirmed trip, then use only the new configuration on the next press.
+    for (const [change, configured] of [['change to G', shortcut('KeyG')],
+        ['clear', null], ['restore default F', shortcut('KeyF')]]) {
+        const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut('KeyG', { ctrlKey: true });
+        const canvas = f.manager.renderer.domElement;
+        assert.equal(keyDown('KeyG', { ctrlKey: true }).prevented, true, change);
+        assert.equal(f.interaction.targetMode, true, change);
+        assert.equal(canvas.style.cursor, 'crosshair', change);
+        assert.equal(f.interaction._movementHeldCode, 'KeyG', change);
+        assert.equal(f.interaction._movementHeldModifiers.ctrlKey, true, change);
+        f.select(new THREE.Vector3(2, 0, 0)); await flush();
+        const target = f.interaction.moveTarget; const token = f.interaction.movementToken;
+        const owner = f.interaction._movementOwnerToken;
+        const assertConfirmedTrip = () => {
+            assert.equal(f.interaction.isMoving, true, change);
+            assert.equal(f.interaction.moveTarget, target, change);
+            assert.equal(f.interaction.movementToken, token, change);
+            assert.equal(f.interaction._movementOwnerToken, owner, change);
+            assert.equal(f.leases.get(f.interaction._movementRestOwner), owner, change);
+        };
+        assertConfirmedTrip();
+        window.nekoVrmGuidedMovementShortcut = configured;
+        window.dispatchEvent({ type: 'neko:vrm-guided-movement-shortcut-changed' });
+        assert.equal(f.interaction.targetMode, false, change);
+        assert.equal(f.interaction._movementHeldCode, null, change);
+        assert.equal(f.interaction._movementHeldModifiers, null, change);
+        assert.equal(canvas.style.cursor, 'default', change);
+        assertConfirmedTrip();
+        assert.equal(keyDown('KeyG', { ctrlKey: true, repeat: true }).prevented, false, change);
+        keyUp('KeyG', { ctrlKey: true }); keyUp('ControlLeft');
+        assert.equal(f.interaction.targetMode, false, 'old key release must leave selection inactive: ' + change);
+        assert.equal(keyDown('KeyG', { ctrlKey: true }).prevented, false,
+            'the old combination is no longer configured: ' + change);
+        keyUp('KeyG', { ctrlKey: true }); keyUp('ControlLeft');
+        for (const code of ['KeyG', 'KeyF']) {
+            const enabled = configured?.code === code;
+            assert.equal(keyDown(code).prevented, enabled, change + ': ' + code);
+            assert.equal(f.interaction.targetMode, enabled, change + ': ' + code);
+            assert.equal(canvas.style.cursor, enabled ? 'crosshair' : 'default', change + ': ' + code);
+            assert.equal(f.interaction._movementHeldCode, enabled ? code : null, change + ': ' + code);
+            assertConfirmedTrip();
+            keyUp(code);
+            assert.equal(f.interaction.targetMode, false, change);
+            assert.equal(f.interaction._movementHeldCode, null, change);
+            assert.equal(f.interaction._movementHeldModifiers, null, change);
+            assert.equal(canvas.style.cursor, 'default', change);
+        }
+        f.interaction.update(0.1);
+        assert.ok(f.scene.position.x > 0, 'confirmed movement continues after ' + change);
+        assertConfirmedTrip();
+        f.interaction.cleanupDragAndZoom(); await flush();
+    }
+    // Configured combinations retain input-method, editor, lock and YUI guards.
+    for (const blocked of [{ isComposing: true }, { keyCode: 229 },
+        { target: { isContentEditable: true } }, { target: { closest: () => ({ tagName: 'INPUT' }) } }]) {
+        const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut('KeyG', { ctrlKey: true });
+        assert.equal(keyDown('KeyG', { ctrlKey: true, ...blocked }).prevented, false);
+        assert.equal(f.interaction.targetMode, false); assert.equal(f.interaction._movementHeldCode, null);
+        f.interaction.cleanupDragAndZoom();
+    }
+    {
+        const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut('KeyG');
+        f.interaction.setLocked(true); assert.equal(keyDown('KeyG').prevented, false);
+        f.interaction.setLocked(false);
+        const contains = context.document.body.classList.contains;
+        context.document.body.classList.contains = value => value === 'yui-taking-over';
+        assert.equal(keyDown('KeyG').prevented, false);
+        context.document.body.classList.contains = contains;
+        keyDown('KeyG'); window.dispatchEvent({ type: 'blur' });
+        assert.equal(f.interaction.targetMode, false); assert.equal(f.interaction._movementHeldCode, null);
+        keyDown('KeyG'); f.interaction.cleanupDragAndZoom();
+        assert.equal(f.interaction._movementHeldCode, null);
+        assert.equal(listeners.get('neko:vrm-guided-movement-shortcut-changed').size, 0);
+        for (const type of ['keydown', 'keyup', 'blur']) assert.equal(listeners.get(type).size, 0, type);
+        assert.equal(keyDown('KeyG').prevented, false, 'disposed model cannot respond to shortcuts');
+        f.interaction.initDragAndZoom();
+        assert.equal(listeners.get('neko:vrm-guided-movement-shortcut-changed').size, 1);
+        f.interaction.initDragAndZoom();
+        assert.equal(listeners.get('neko:vrm-guided-movement-shortcut-changed').size, 1, 'reinit replaces its listener');
+        assert.equal(keyDown('KeyG').prevented, true);
         f.interaction.cleanupDragAndZoom();
     }
     // Arrival scheduling uses the shared paced-frame hook, including cancellation.
