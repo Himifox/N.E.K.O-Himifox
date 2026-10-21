@@ -331,6 +331,15 @@ class VRMInteraction {
         return !!target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]');
     }
 
+    _isKeyboardInteractiveTarget(target) {
+        if (this._isEditableTarget(target)) return true;
+        if (!target || typeof target.closest !== 'function') return false;
+        return !!target.closest('button, a[href], summary, audio[controls], video[controls], '
+            + '[role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], '
+            + '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], '
+            + '[role="tab"], [role="slider"], [role="spinbutton"], [tabindex]:not([tabindex="-1"]):not(canvas)');
+    }
+
     _screenPointToMovementTarget(clientX, clientY) {
         const camera = this.manager.camera;
         const scene = this.manager.currentModel?.scene;
@@ -794,8 +803,11 @@ class VRMInteraction {
             if (!this.isDragging && canvas) canvas.style.cursor = 'default';
         };
         this._movementKeyDownHandler = (e) => {
-            if (e.repeat || e.isComposing || e.keyCode === 229) return;
-            if (this._isEditableTarget(e.target)) return;
+            if (e.defaultPrevented || e.repeat || e.isComposing || e.keyCode === 229) return;
+            // Keep native forward/backward focus traversal, even on the canvas.
+            // Tab with Ctrl/Alt/Meta can still be explicitly configured.
+            if (e.code === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) return;
+            if (this._isKeyboardInteractiveTarget(e.target)) return;
             const shortcut = window.nekoVrmGuidedMovementShortcut;
             if (shortcut === undefined) {
                 // 旧页面/浏览器保留物理 F 的行为，包括 Shift+F。
