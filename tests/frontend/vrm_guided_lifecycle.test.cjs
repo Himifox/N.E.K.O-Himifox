@@ -626,14 +626,56 @@ const vm = require('node:vm');
         ...['link', 'checkbox', 'radio', 'switch', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
             'option', 'tab', 'slider', 'spinbutton'].map(role => keyboardElement('div', { role }))];
     for (const target of keyboardControls) {
-        for (const configured of [undefined, shortcut('Enter'), shortcut('Space'), shortcut('KeyF'), shortcut('KeyG', { ctrlKey: true })]) {
+        for (const code of ['Enter', 'Space']) {
+            for (const shiftKey of [false, true]) {
+                const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut(code, { shiftKey });
+                assert.equal(keyDown(code, { target, shiftKey }).prevented, false, code + ' preserves focused control activation');
+                assert.equal(f.interaction.targetMode, false);
+                assert.equal(f.interaction._movementHeldCode, null);
+                f.interaction.cleanupDragAndZoom();
+            }
+        }
+    }
+    // Focus retained after using a button must not disable the original F or
+    // custom letter bindings. A focusable ancestor is not a blanket key veto.
+    for (const target of [...keyboardControls, keyboardElement('canvas', {}, keyboardElement('div', { tabindex: '0' }))]) {
+        for (const configured of [undefined, shortcut('KeyF'), shortcut('KeyG'),
+            ...['ctrlKey', 'altKey', 'metaKey', 'shiftKey'].map(modifier => shortcut('KeyG', { [modifier]: true }))]) {
             const f = fixture(); window.nekoVrmGuidedMovementShortcut = configured;
             const code = configured?.code || 'KeyF';
-            const event = keyDown(code, { target, ctrlKey: configured?.ctrlKey || false });
-            assert.equal(event.prevented, false, code + ' must preserve focused control behavior');
+            assert.equal(keyDown(code, { ...configured, target }).prevented, true, code + ' still works after a control takes focus');
+            assert.equal(f.interaction.targetMode, true);
+            keyUp(code, { ...configured, target, defaultPrevented: true });
             assert.equal(f.interaction.targetMode, false);
             assert.equal(f.interaction._movementHeldCode, null);
+            if (configured === undefined) {
+                assert.equal(keyDown('KeyF', { target, shiftKey: true }).prevented, true, 'legacy Shift+F remains optional on controls');
+                keyUp('KeyF', { target, shiftKey: true });
+            }
             f.interaction.cleanupDragAndZoom();
+        }
+    }
+    for (const code of ['Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']) {
+        for (const shiftKey of [false, true]) {
+            const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut(code, { shiftKey });
+            const target = keyboardElement('span', {}, keyboardElement('div', { role: 'menuitem', tabindex: '0' }));
+            assert.equal(keyDown(code, { target, shiftKey }).prevented, false, code + ' preserves focused widget navigation and exit');
+            assert.equal(f.interaction.targetMode, false);
+            f.interaction.cleanupDragAndZoom();
+        }
+    }
+    for (const modifier of ['ctrlKey', 'altKey', 'metaKey']) {
+        for (const code of ['Enter', 'Space', 'Escape', 'ArrowDown', 'Home']) {
+            for (const target of [keyboardElement('button'), keyboardElement('canvas', { tabindex: '0' })]) {
+                const f = fixture(); window.nekoVrmGuidedMovementShortcut = shortcut(code, { [modifier]: true });
+                assert.equal(keyDown(code, { target, [modifier]: true }).prevented, true, 'command-modified actions can be explicitly configured');
+                assert.equal(f.interaction.targetMode, true);
+                keyUp(code, { target, [modifier]: true });
+                assert.equal(f.interaction.targetMode, false);
+                assert.equal(keyDown(code, { target, [modifier]: true, defaultPrevented: true }).prevented, false);
+                assert.equal(f.interaction.targetMode, false, 'earlier handlers still own command-modified actions');
+                f.interaction.cleanupDragAndZoom();
+            }
         }
     }
     for (const target of [keyboardElement('body'), keyboardElement('button'), keyboardElement('canvas', { tabindex: '0' })]) {
@@ -655,7 +697,7 @@ const vm = require('node:vm');
     // noninteractive anchors and programmatic-focus containers remain usable.
     for (const target of [keyboardElement('canvas', { tabindex: '0' }), keyboardElement('a'),
         keyboardElement('div', { tabindex: '-1' }), keyboardElement('div', { role: 'presentation' })]) {
-        for (const configured of [undefined, shortcut('Enter'), shortcut('Space'), shortcut('KeyG', { ctrlKey: true })]) {
+        for (const configured of [undefined, ...['Enter', 'Space', 'Escape', 'ArrowDown', 'Home'].map(code => shortcut(code)), shortcut('KeyG', { ctrlKey: true })]) {
             const f = fixture(); window.nekoVrmGuidedMovementShortcut = configured;
             const code = configured?.code || 'KeyF';
             const event = keyDown(code, { target, ctrlKey: configured?.ctrlKey || false });

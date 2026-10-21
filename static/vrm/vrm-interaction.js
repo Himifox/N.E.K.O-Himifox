@@ -804,10 +804,16 @@ class VRMInteraction {
         };
         this._movementKeyDownHandler = (e) => {
             if (e.defaultPrevented || e.repeat || e.isComposing || e.keyCode === 229) return;
+            if (this._isEditableTarget(e.target)) return;
+            const hasCommandModifier = e.ctrlKey || e.altKey || e.metaKey;
             // Keep native forward/backward focus traversal, even on the canvas.
             // Tab with Ctrl/Alt/Meta can still be explicitly configured.
-            if (e.code === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) return;
-            if (this._isKeyboardInteractiveTarget(e.target)) return;
+            if (e.code === 'Tab' && !hasCommandModifier) return;
+            // Controls own their activation/navigation keys, not ordinary F/G
+            // bindings merely because a preceding click left them focused.
+            if (!hasCommandModifier && ['Enter', 'Space', 'Escape', 'ArrowUp', 'ArrowDown',
+                'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.code)
+                && this._isKeyboardInteractiveTarget(e.target)) return;
             const shortcut = window.nekoVrmGuidedMovementShortcut;
             if (shortcut === undefined) {
                 // 旧页面/浏览器保留物理 F 的行为，包括 Shift+F。
